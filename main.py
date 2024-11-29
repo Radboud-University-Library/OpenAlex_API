@@ -1,8 +1,10 @@
 import requests
 import pandas as pd
 
+
 radboud = "i145872427"
-"works/W2125284466"
+ror = "016xsfp80"
+example_work = "W2125284466"
 
 class ApiRequest:
     # Configure API class default parameters
@@ -73,42 +75,59 @@ class Dataframe:
 
 class Filter:
     def __init__(self):
-        self.request = ApiRequest()
+        self.filter = "?filter"
 
-    def filter_expressions(self):
-        pass
-        # different symbols
-
-    def filter_url(self, attribute, value):
-        filter_url = f"?filter={attribute}:{value}"
+    """ Filter multiple attributes """
+    def filter_attributes(self, filters):
+        filter_strings = [f"{attribute}:{value}" for attribute, value in filters]
+        filter_url = f"{self.filter}=" + ",".join(filter_strings)
         return filter_url
-
-    def filter_endpoint(self):
-        filter_endpoint = f"{self.request.full_url}{self.filter_url}"
-        return filter_endpoint
-
 
 class Entities:
     def __init__(self):
         self.request = ApiRequest()
+        self.filter_instance = Filter()
 
-class Works:
-    def __init__(self):
-        self.request = ApiRequest()
+    """ Get single entity """
+    def get_entity(self, endpoint):
+        return self.request.get_data(endpoint)
 
-    def get_works(self):
-        #endpoint = f"{self.entity}?filter=authorships.affiliations.institution_ids:{radboud}"
-        endpoint = f"works?filter=author.id:A5048491430"
-        #json_data = self.get_data(endpoint)
-        #df = self.json_to_dataframe(json_data)
+    """ Get multiple entities """
+    def get_multiple_entities(self, endpoint):
         return self.request.get_results_data(endpoint)
+
+    """ Create filter endpoint. Receives entity type from calling class """
+    def filter(self, entity_type, filters):
+        endpoint = f"{entity_type}{self.filter_instance.filter_attributes(filters)}"
+        return self.get_multiple_entities(endpoint)
+
+
+class Works():
+    def __init__(self):
+        self.entities = Entities()
+        self.entity = "works"
+
+    """ Delegates dynamic method calls to Entities class """
+    def __getattr__(self, name):
+        return getattr(self.entities, name)
+
+    """ Call Filter method from Entities class for list filters and adds entity type. 
+        Expects a tuple variable """
+    def filter(self, filters):
+        return self.entities.filter(self.entity, filters)
+
+class Institution():
+    def __init__(self):
+        self.institutions_id = "i145872427"
+        self.ror = "016xsfp80"
 
 
 work = Works()
-w = work.get_works()
+#w = work.filter([("institutions.id","i145872427"),("from_publication_date","2022-01-01")])
+w = work.filter([("institutions.id","i145872427")])
 
-print(w)
+print(len(w))
 #print(w["results"][0].keys())
-#print(w["meta"])
+#w["meta"]
 #print(w["group_by"])
 #print(w.keys())
