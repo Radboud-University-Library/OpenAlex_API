@@ -11,6 +11,7 @@ class ApiRequest:
     BASE_URL = "https://api.openalex.org/"
     EMAIL = "sjors.startman@ru.nl"
     HEADER = {"User-Agent": f"mailto:{EMAIL}"}
+    PER_PAGE = "100"
 
     """ Initialize API request """
     def __init__(self, base_url=None, email=None, header=None):
@@ -18,6 +19,7 @@ class ApiRequest:
         self.base_url = base_url or self.BASE_URL
         self.email = email or self.EMAIL
         self.header = header or self.HEADER
+        self.per_page = self.PER_PAGE
 
     """ Build full url """
     def full_url(self, endpoint):
@@ -36,42 +38,22 @@ class ApiRequest:
         meta_data = self.get_data(endpoint)["meta"]
         return meta_data
 
-    """ Return results data """
-    def get_results_data(self, endpoint):
+    """ Return results data """ # Kan weg?
+    def get_results_data_(self, endpoint):
         results_data = self.get_data(endpoint)["results"]
         return results_data
 
-class Paging:
-    """ Configure number of pages to be shown """
-    PER_PAGE = "100"
-    def __init__(self, per_page=None):
-        self.request = ApiRequest()
-        self.per_page = per_page or self.PER_PAGE
-
-    """ Cursor paging to see all pages and return data """
-    def cursor_paging(self, endpoint):
+    """ Return results data with cursor paging to view all pages """
+    def get_results_data(self, endpoint):
         cursor = "*"
         data = []
         while True:
-            response = self.request.get_data(f"{endpoint}&per_page={self.per_page}&cursor={cursor}")
+            response = self.get_data((f"{endpoint}&per_page={self.per_page}&cursor={cursor}"))
             data.extend(response.get('results', []))
             cursor = response.get('meta', {}).get('next_cursor', None)
             if cursor is None:
                 break
         return data
-
-class Dataframe:
-    # Convert JSON data to pandas Dataframe
-    def json_to_dataframe(self, json_data):
-        if isinstance(json_data, list):
-            # If it's a list, pass it directly to pd.json_normalize
-            df = pd.json_normalize(json_data)
-        elif isinstance(json_data, dict):
-            # If it's a dictionary, wrap it in a list first
-            df = pd.json_normalize([json_data])
-        else:
-            raise ValueError("The input data must be a dictionary or a list of dictionaries.")
-        return df
 
 class Filter:
     def __init__(self):
@@ -124,7 +106,8 @@ class Institution():
 
 work = Works()
 #w = work.filter([("institutions.id","i145872427"),("from_publication_date","2022-01-01")])
-w = work.filter([("institutions.id","i145872427")])
+#w = work.filter([("institutions.id","i145872427")])
+w = work.get_entity(example_work)
 
 print(len(w))
 #print(w["results"][0].keys())
