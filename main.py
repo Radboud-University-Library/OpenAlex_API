@@ -1,6 +1,6 @@
 import requests
 import pandas as pd
-
+import json
 
 radboud = "i145872427"
 ror = "016xsfp80"
@@ -83,6 +83,13 @@ class Entities:
         endpoint = f"{entity_type}{self.filter_instance.filter_attributes(filters)}"
         return self.get_multiple_entities(endpoint)
 
+    """ Call Export to Json method from Json class """
+    def export_to_json(self, data, filepath):
+        Json().export_to_json(data, filepath)
+
+    """ Call Filter Json method from Json class"""
+    def filter_json(self, json_data, selection_of_keys):
+        Json().filter_json(json_data, selection_of_keys)
 
 class Works():
     def __init__(self):
@@ -99,18 +106,44 @@ class Works():
         return self.entities.filter(self.entity, filters)
 
 class Institution():
+    """ Nog geen functie """
     def __init__(self):
         self.institutions_id = "i145872427"
         self.ror = "016xsfp80"
 
+class Json():
+    """ Export Json data """
+    @staticmethod
+    def export_to_json(data, file_path):
+        with open(file_path, "w") as file:
+            json.dump(data, file, indent=4)
 
-work = Works()
-#w = work.filter([("institutions.id","i145872427"),("from_publication_date","2022-01-01")])
-#w = work.filter([("institutions.id","i145872427")])
-w = work.get_entity(example_work)
+    """ Create list of based on selection of keys from a dict """
+    @staticmethod
+    def filter_json(json_data, selection_of_keys):
+        json_selection = [
+            {key: item[key] for key in selection_of_keys if key in item}
+                               for item in json_data
+        ]
+        return json_selection
 
-print(len(w))
-#print(w["results"][0].keys())
-#w["meta"]
-#print(w["group_by"])
-#print(w.keys())
+if __name__ == "__main__":
+    work = Works()
+    works_data = work.filter([("institutions.id","i145872427"),("from_publication_date","2024-10-01"),("is_corresponding","true")])
+    works_data = works_data[0:5]
+    keys_to_select = ["id", "doi", "title", "publication_date", "corresponding_author_ids", "cited_by_count", "referenced_works", "related_works", "counts_by_year"]
+    # Create list of based on selection of keys from a dict
+    selected_works_data = work.
+
+
+    print(works_data[0].keys())
+    work.export_to_json(selected_works_data, 'works_data.json')
+
+    #df.to_excel("test.xlsx", index=False)
+    #w = work.filter([("institutions.id","i145872427")])
+    #w = work.get_entity(example_work)
+    #w = work.filter([("institutions.id","i145872427")])
+    #w = work.get_entity(example_work)
+    #print(w[0].keys())
+    #w["meta"]
+    #print(w["group_by"])
