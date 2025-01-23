@@ -1,10 +1,20 @@
 import requests
 import pandas as pd
 import json
+from datetime import datetime
+import aiohttp
+import asyncio
+from typing import List, Generator, AsyncGenerator
+from urllib.parse import quote
+import time
+from email.utils import parsedate_to_datetime
+from aiohttp import ClientResponseError
 
 radboud = "i145872427"
 ror = "016xsfp80"
 example_work = "W2125284466"
+example_doi = "10.1111/ADB.12766"
+
 
 class ApiRequest:
     # Configure API class default parameters
@@ -14,6 +24,7 @@ class ApiRequest:
     PER_PAGE = "100"
 
     """ Initialize API request """
+
     def __init__(self, base_url=None, email=None, header=None):
         # Configure API class variables
         self.base_url = base_url or self.BASE_URL
@@ -22,28 +33,40 @@ class ApiRequest:
         self.per_page = self.PER_PAGE
 
     """ Build full url """
+
     def full_url(self, endpoint):
         full_url = f"{self.base_url}{endpoint}"
         return full_url
 
     """ Make API request and returns JSON response data """
+
     def get_data(self, endpoint):
         full_url = self.full_url(endpoint)
         response = requests.get(full_url, headers=self.header)
-        data = response.json()
-        return data
+
+        # Check for HTTP errors
+        if response.status_code == 404:
+            print(f"Error 404: The requested URL was not found: {endpoint}")
+            return None  # Return None or an appropriate fallback
+        elif response.status_code != 200:
+            print(f"HTTP Error {response.status_code}: {response.text}")
+            response.raise_for_status()
+
+        try:
+            data = response.json()
+            return data
+        except requests.exceptions.JSONDecodeError:
+            print(f"Invalid JSON response: {response.text}")
+            raise
 
     """ Return meta data"""
+
     def get_meta_data(self, endpoint):
         meta_data = self.get_data(endpoint)["meta"]
         return meta_data
 
-    """ Return results data """ # Kan weg?
-    def get_results_data_(self, endpoint):
-        results_data = self.get_data(endpoint)["results"]
-        return results_data
-
     """ Return results data with cursor paging to view all pages """
+
     def get_results_data(self, endpoint):
         cursor = "*"
         data = []
@@ -55,95 +78,335 @@ class ApiRequest:
                 break
         return data
 
-class Filter:
-    def __init__(self):
-        self.filter = "?filter"
 
-    """ Filter multiple attributes """
-    def filter_attributes(self, filters):
+class ApiRequestAsync:
+    # Configure API class default parameters
+    BASE_URL = "https://api.openalex.org/"
+    EMAIL = "sjors.startman@ru.nl"
+    HEADER = {"User-Agent": f"mailto:{EMAIL}"}
+    PER_PAGE = "100"
+    SEMAPHORE = 10
+    LAST_REQUEST_TIME = 0
+    MIN_INTERVAL = 0.11
+
+    def __init__(self, base_url=None, email=None, header=None, session: aiohttp.ClientSession = None):
+        """ Initialize API request """
+        self.base_url = base_url or self.BASE_URL
+        self.email = email or self.EMAIL
+        self.header = header or self.HEADER
+        self.per_page = self.PER_PAGE
+        self.semaphore = asyncio.Semaphore(self.SEMAPHORE)
+        self.last_request_time = self.LAST_REQUEST_TIME
+        self.min_interval = self.MIN_INTERVAL
+        self._external_session = session is not None
+        self.session = session or aiohttp.ClientSession(headers=self.header)
+
+    def full_url(self, endpoint):
+        """ Build full url """
+        return f"{self.base_url}{endpoint}"
+
+    async def get_data(self, endpoint):
+        full_url = self.full_url(endpoint)
+
+        async with self.semaphore:
+            now = time.monotonic()
+            elapsed = now - self.last_request_time
+            if elapsed < self.min_interval:
+                await asyncio.sleep(self.min_interval - elapsed)
+            self.last_request_time = time.monotonic()
+
+            for attempt in range(3):
+                try:
+                    async with self.session.get(full_url) as response:
+                        if response.status == 429:
+                            retry_after = response.headers.get("Retry-After", "1")
+                            try:
+                                wait_time = int(retry_after)
+                            except ValueError:
+                                retry_dt = parsedate_to_datetime(retry_after)
+                                now_dt = datetime.now(retry_dt.tzinfo)
+                                wait_time = max((retry_dt - now_dt).total_seconds(), 1)
+                            backoff = 2 ** attempt
+                            wait_time += backoff
+                            print(
+                                f"429 Too Many Requests. Retrying after {wait_time:.2f} seconds (backoff x{backoff})...")
+                            await asyncio.sleep(wait_time)
+                            continue
+                        elif response.status == 404:
+                            print(f"Error 404: Not found: {endpoint}")
+                            return None
+                        elif response.status != 200:
+                            text = await response.text()
+                            print(f"HTTP Error {response.status}: {text}")
+                            response.raise_for_status()
+
+                        return await response.json()
+
+                except aiohttp.ClientError as e:
+                    print(f"Connection error on attempt {attempt + 1}: {e}")
+                    await asyncio.sleep(1 + attempt)
+
+        return None
+
+    async def close(self):
+        if not self._external_session:
+            await self.session.close()
+
+    async def get_meta_data(self, endpoint):
+        data = await self.get_data(endpoint)
+        return data.get("meta") if data else None
+
+    async def get_results_data(self, endpoint):
+        cursor = "*"
+        data = []
+
+        while True:
+            paged_endpoint = f"{endpoint}&per_page={self.per_page}&cursor={cursor}"
+            response = await self.get_data(paged_endpoint)
+            if not response:
+                break
+
+            data.extend(response.get('results', []))
+            cursor = response.get('meta', {}).get('next_cursor')
+            if not cursor:
+                break
+
+        return data
+
+
+class Filter:
+    @staticmethod
+    def filter_attributes(filters: list[tuple[str, str]]) -> str:
+        """Filter multiple attributes and return filter query string."""
+        # Validate the input
+        if not isinstance(filters, (list, tuple)):
+            raise ValueError("Filters must be a list or tuple of key-value pairs")
+        # Create filter endpoint
         filter_strings = [f"{attribute}:{value}" for attribute, value in filters]
-        filter_url = f"{self.filter}=" + ",".join(filter_strings)
-        return filter_url
+        filter_endpoint = f"?filter=" + ",".join(filter_strings)
+        return filter_endpoint
+
 
 class Entities:
     def __init__(self):
-        self.request = ApiRequest()
+        self.request = ApiRequestAsync()
         self.filter_instance = Filter()
 
-    """ Get single entity """
-    def get_entity(self, endpoint):
-        return self.request.get_data(endpoint)
+    async def get_entity(self, endpoint: str):
+        """ Get single entity """
+        return await self.request.get_data(endpoint)
 
-    """ Get multiple entities """
-    def get_multiple_entities(self, endpoint):
-        return self.request.get_results_data(endpoint)
+    async def get_multiple_entities(self, endpoint: str) -> AsyncGenerator[dict, None]:
+        """Get multiple entities as an async generator."""
+        results = await self.request.get_results_data(endpoint)
+        for result in results:
+            yield result
 
-    """ Create filter endpoint. Receives entity type from calling class """
-    def filter(self, entity_type, filters):
+    async def filter(self, entity_type: str, filters: List[tuple[str, str]]) -> AsyncGenerator[dict, None]:
+        """Create filter endpoint. Receives entity type from calling class."""
+        if not isinstance(filters, (list, tuple)):
+            raise ValueError("Filters must be a list or tuple of key-value pairs")
         endpoint = f"{entity_type}{self.filter_instance.filter_attributes(filters)}"
         return self.get_multiple_entities(endpoint)
 
-    """ Call Export to Json method from Json class """
-    def export_to_json(self, data, filepath):
-        Json().export_to_json(data, filepath)
 
-    """ Call Filter Json method from Json class"""
-    def filter_json(self, json_data, selection_of_keys):
-        Json().filter_json(json_data, selection_of_keys)
-
-class Works():
+class Works:
     def __init__(self):
         self.entities = Entities()
         self.entity = "works"
 
-    """ Delegates dynamic method calls to Entities class """
     def __getattr__(self, name):
+        """ Delegates dynamic method calls to Entities class """
         return getattr(self.entities, name)
 
-    """ Call Filter method from Entities class for list filters and adds entity type. 
-        Expects a tuple variable """
-    def filter(self, filters):
-        return self.entities.filter(self.entity, filters)
+    async def filter(self, filters):
+        """ Call Filter method from Entities class for list filters and adds entity type.
+            Expects a tuple variable """
+        return await self.entities.filter(self.entity, filters)
 
-class Institution():
+
+class Institution:
+    RADBOUD_ID = "i145872427"
+    RADBOUD_ROR = "016xsfp80"
     """ Nog geen functie """
-    def __init__(self):
-        self.institutions_id = "i145872427"
-        self.ror = "016xsfp80"
 
-class Json():
-    """ Export Json data """
+    def __init__(self, institution_id=None, institution_ror=None):
+        self.institution_id = institution_id or self.RADBOUD_ID
+        self.ror = institution_ror or self.RADBOUD_ROR
+
+
+class Json:
     @staticmethod
     def export_to_json(data, file_path):
+        """ Export Json data """
         with open(file_path, "w") as file:
             json.dump(data, file, indent=4)
 
-    """ Create list of based on selection of keys from a dict """
     @staticmethod
-    def filter_json(json_data, selection_of_keys):
+    def filter_json(json_data, keys_to_extract):
+        """ Create list of based on selection of keys from a dict """
+        # If json_data is a dictionary, wrap it in a list for uniform processing
+        if isinstance(json_data, dict):
+            json_data = [json_data]
+
+        # Extract the selected keys
         json_selection = [
-            {key: item[key] for key in selection_of_keys if key in item}
-                               for item in json_data
+            {key: item[key] for key in keys_to_extract if key in item}
+            for item in json_data
         ]
-        return json_selection
+
+        # Return a single dictionary if input was a single dictionary
+        return json_selection[0] if len(json_selection) == 1 else json_selection
+
+
+class Doi:
+    @staticmethod
+    def build_endpoint(doi):
+        doi_endpoint = f"works/https://doi.org/{doi}"
+        return doi_endpoint
+
+    @staticmethod
+    def batch_endpoint(doi_batch: List[str]) -> str:
+        """Build batch endpoint while preserving | in DOIs."""
+        encoded_dois = [quote(doi, safe="|") for doi in doi_batch]
+        doi_batch_query = "|".join(encoded_dois)  # Keep | separator
+        doi_batch_endpoint = f"works?filter=doi:{doi_batch_query}"
+        return doi_batch_endpoint
+
+
+class Excel:
+    def __init__(self, file_path=None):
+        self.file_path = file_path
+
+    def read_excel(self, file_path):
+        df = pd.read_excel(file_path)
+        return df
+
+    def write_excel(self, df, file_path, index=False):
+        output_path = self.create_file_name(file_path)
+        df.to_excel(output_path, index=index)
+
+    def create_file_name(self, file_path):
+        base_name = file_path.rsplit('.', 1)[0]
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        return f"{base_name}_{current_date}.xlsx"
+
+
+class Batch:
+    def __init__(self, df: pd.DataFrame, column_name: str, works_instance, batch_size: int = 50):
+        self.df = df
+        self.column_name = column_name
+        self.works_instance = works_instance  # Pass a Works instance
+        self.batch_size = batch_size
+
+    def generate_batches(self) -> Generator[List[str], None, None]:
+        """Generate batches of DOIs from the DataFrame."""
+        batch = self.df[self.column_name].dropna().tolist()  # Get all non-null values
+        for i in range(0, len(batch), self.batch_size):
+            yield batch[i:i + self.batch_size]
+
+    async def process_single_doi(self, doi: str, retries=5) -> tuple:
+        """Process a single DOI with retry logic."""
+        doi_endpoint = Doi.build_endpoint(doi)
+        for attempt in range(retries):
+            try:
+                data = await self.works_instance.get_entity(doi_endpoint)
+                return doi, data
+            except Exception as e:
+                print(f"DOI {doi} failed (attempt {attempt + 1}/{retries}): {e}")
+                if attempt < retries - 1:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                else:
+                    return doi, e  # Return the error for logging/handling
+
+    async def process_batch(self, batch: list, retries=5) -> list:
+        """Process a single batch with retry logic and handle incomplete results."""
+        batch_endpoint = Doi.batch_endpoint(batch)
+        for attempt in range(retries):
+            try:
+                # Fetch data for the entire batch
+                response = await self.works_instance.get_entity(batch_endpoint)
+                results = response.get("results", [])
+
+                # Match results to DOIs, handling cases where results are missing
+                doi_to_result = {result.get("doi", "").lower(): result for result in results}
+                batch_results = [
+                    (doi, doi_to_result.get(doi.lower(), None)) for doi in batch
+                ]
+                return batch_results
+            except Exception as e:
+                print(f"Batch processing failed (attempt {attempt + 1}/{retries}): {e}")
+                if attempt < retries - 1:
+                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                else:
+                    print("Retrying individual DOIs for this batch...")
+                    # Retry individual DOIs if the batch fails
+                    individual_results = []
+                    for doi in batch:
+                        result = await self.process_single_doi(doi, retries)
+                        individual_results.append(result)
+                    return individual_results
+
+    async def process_batches(self):
+        """Process all batches asynchronously."""
+        tasks = [self.process_batch(batch) for batch in self.generate_batches()]
+        all_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Flatten results and handle exceptions
+        flattened_results = []
+        for result in all_results:
+            if isinstance(result, list):
+                flattened_results.extend(result)
+            else:
+                print(f"Unexpected error: {result}")
+        return flattened_results
+
 
 if __name__ == "__main__":
-    work = Works()
-    works_data = work.filter([("institutions.id","i145872427"),("from_publication_date","2024-10-01"),("is_corresponding","true")])
-    works_data = works_data[0:5]
-    keys_to_select = ["id", "doi", "title", "publication_date", "corresponding_author_ids", "cited_by_count", "referenced_works", "related_works", "counts_by_year"]
-    # Create list of based on selection of keys from a dict
-    selected_works_data = work.
+    # work = Works()
+    # works_data = work.filter([("institutions.id","i145872427"),("from_publication_date","2024-10-01"),("is_corresponding","true")])
+    # df = pd.DataFrame(works_data)
+    # works_data = works_data[0:5]
+
+    """ Proberen: asynchronous met batch, als batch mislukt dan batch uit elkaar halen en 1 voor 1. Dan weer nieuwe batch. """
+
+    df = pd.read_excel("UKBsis Publication Details.xlsx")
+    df = df.head(100)
+    # Initialize new columns
+    df["cited_by_count"] = None
+    df["referenced_works_count"] = None
 
 
-    print(works_data[0].keys())
-    work.export_to_json(selected_works_data, 'works_data.json')
+    async def fetch_and_prepare_result(works, doi, index):
+        doi_endpoint = Doi.build_endpoint(doi)
 
-    #df.to_excel("test.xlsx", index=False)
-    #w = work.filter([("institutions.id","i145872427")])
-    #w = work.get_entity(example_work)
-    #w = work.filter([("institutions.id","i145872427")])
-    #w = work.get_entity(example_work)
-    #print(w[0].keys())
-    #w["meta"]
-    #print(w["group_by"])
+        try:
+            result = await works.get_entity(doi_endpoint)
+            if result is None:
+                return index, "No data", "No data"
+            return index, result.get("cited_by_count"), result.get("referenced_works_count")
+        except Exception as e:
+            print(f"Error for DOI {doi}: {e}")
+            return index, "Error", "Error"
+
+
+    async def enrich_doi(df):
+        async with aiohttp.ClientSession() as session:
+            request = ApiRequestAsync(session=session)
+            works = Works()
+            works.entities.request = request  # Inject the shared session-based requester
+
+            tasks = [
+                fetch_and_prepare_result(works, row['DOI'], index)
+                for index, row in df.iterrows()
+            ]
+            results = await asyncio.gather(*tasks)
+
+            for index, cited_by_count, referenced_works_count in results:
+                df.at[index, "cited_by_count"] = cited_by_count
+                df.at[index, "referenced_works_count"] = referenced_works_count
+
+    asyncio.run(enrich_doi(df))
+
+    # Save the updated DataFrame
+    df.to_excel("UKBsis_Publication_Details_Updated.xlsx", index=False)
