@@ -16,69 +16,6 @@ example_work = "W2125284466"
 example_doi = "10.1111/ADB.12766"
 
 
-class ApiRequest:
-    # Configure API class default parameters
-    BASE_URL = "https://api.openalex.org/"
-    EMAIL = "sjors.startman@ru.nl"
-    HEADER = {"User-Agent": f"mailto:{EMAIL}"}
-    PER_PAGE = "100"
-
-    """ Initialize API request """
-
-    def __init__(self, base_url=None, email=None, header=None):
-        # Configure API class variables
-        self.base_url = base_url or self.BASE_URL
-        self.email = email or self.EMAIL
-        self.header = header or self.HEADER
-        self.per_page = self.PER_PAGE
-
-    """ Build full url """
-
-    def full_url(self, endpoint):
-        full_url = f"{self.base_url}{endpoint}"
-        return full_url
-
-    """ Make API request and returns JSON response data """
-
-    def get_data(self, endpoint):
-        full_url = self.full_url(endpoint)
-        response = requests.get(full_url, headers=self.header)
-
-        # Check for HTTP errors
-        if response.status_code == 404:
-            print(f"Error 404: The requested URL was not found: {endpoint}")
-            return None  # Return None or an appropriate fallback
-        elif response.status_code != 200:
-            print(f"HTTP Error {response.status_code}: {response.text}")
-            response.raise_for_status()
-
-        try:
-            data = response.json()
-            return data
-        except requests.exceptions.JSONDecodeError:
-            print(f"Invalid JSON response: {response.text}")
-            raise
-
-    """ Return meta data"""
-
-    def get_meta_data(self, endpoint):
-        meta_data = self.get_data(endpoint)["meta"]
-        return meta_data
-
-    """ Return results data with cursor paging to view all pages """
-
-    def get_results_data(self, endpoint):
-        cursor = "*"
-        data = []
-        while True:
-            response = self.get_data((f"{endpoint}&per_page={self.per_page}&cursor={cursor}"))
-            data.extend(response.get('results', []))
-            cursor = response.get('meta', {}).get('next_cursor', None)
-            if cursor is None:
-                break
-        return data
-
-
 class ApiRequestAsync:
     # Configure API class default parameters
     BASE_URL = "https://api.openalex.org/"
@@ -231,7 +168,7 @@ class Works:
             Expects a tuple variable """
         return await self.entities.filter(self.entity, filters)
 
-    def fetch_works(filters: list[tuple[str, str]]) -> pd.DataFrame:
+    def fetch_works(filters: list[tuple[str, str]]):
         """ Enter filters in a list: [("institution_id", "i145872427")] """
         async def _run():
             async with Session() as aio_session:
@@ -242,8 +179,7 @@ class Works:
                 async for item in await works.filter(filters):
                     results.append(item)
                 return results
-
-        return pd.DataFrame(asyncio.run(_run()))
+        return asyncio.run(_run())
 
 
 class Institution:
@@ -322,11 +258,11 @@ class Excel:
 class Batch:
     BATCH_SIZE = 50
 
-    def __init__(self, df: pd.DataFrame, column_name: str, works_instance = Works, batch_size=None):
+    def __init__(self, df: pd.DataFrame, column_name: str, works_instance: Works, batch_size: int = None):
         self.df = df
         self.column_name = column_name
         self.works_instance = works_instance
-        self.batch_size = self.BATCH_SIZE or batch_size
+        self.batch_size = batch_size or self.BATCH_SIZE
 
     def generate_batches(self) -> Generator[List[str], None, None]:
         """Yield batches of DOIs from the DataFrame."""
@@ -369,14 +305,14 @@ class Batch:
                 update_fn(self.df, doi, result)
 
 if __name__ == "__main__":
-    df = Works.fetch_works([
-        ("institutions.id", "i145872427"),
-        ("from_publication_date", "2024-10-01"),
-        ("is_corresponding", "true")
-    ])
+    #works = Works.fetch_works([
+    #    ("institutions.id", "i145872427"),
+    #    ("from_publication_date", "2024-10-01"),
+    #    ("is_corresponding", "true")
+    #])
+    #print(works)
 
     """ 
-
     Class DataExtracter/DoiEnricher maken
     Batches toevoegen
     Class Batch maken
@@ -420,7 +356,7 @@ if __name__ == "__main__":
                 df.at[index, "referenced_works_count"] = referenced_works_count
 
 
-    #asyncio.run(enrich_doi(df))
+    asyncio.run(enrich_doi(df))
 
     # Save the updated DataFrame
     df.to_excel("UKBsis_Publication_Details_Updated.xlsx", index=False)
