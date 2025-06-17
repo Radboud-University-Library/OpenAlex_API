@@ -83,17 +83,17 @@ class ApiRequestAsync:
     # Configure API class default parameters
     BASE_URL = "https://api.openalex.org/"
     PER_PAGE = "100"
-    SEMAPHORE = 5
+    SEMAPHORE = 3
     LAST_REQUEST_TIME = 0
-    MIN_INTERVAL = 0.2
+    MIN_INTERVAL = 0.5
 
-    def __init__(self, base_url=None, session: aiohttp.ClientSession = None):
+    def __init__(self, base_url=None, semaphore=None, min_interval=None, session: aiohttp.ClientSession = None):
         """ Initialize API request """
         self.base_url = base_url or self.BASE_URL
         self.per_page = self.PER_PAGE
-        self.semaphore = asyncio.Semaphore(self.SEMAPHORE)
+        self.semaphore = semaphore or asyncio.Semaphore(self.SEMAPHORE)
         self.last_request_time = self.LAST_REQUEST_TIME
-        self.min_interval = self.MIN_INTERVAL
+        self.min_interval = min_interval or self.MIN_INTERVAL
         self.session = session
 
     def full_url(self, endpoint):
@@ -123,8 +123,7 @@ class ApiRequestAsync:
                                 wait_time = max((retry_dt - now_dt).total_seconds(), 1)
                             backoff = 2 ** attempt
                             wait_time += backoff
-                            print(
-                                f"429 Too Many Requests. Retrying after {wait_time:.2f} seconds (backoff x{backoff})...")
+                            print(f"429 Too Many Requests at: {full_url}. Retrying after {wait_time:.2f} seconds (backoff x{backoff})...")
                             await asyncio.sleep(wait_time)
                             continue
                         elif response.status == 404:
@@ -232,6 +231,20 @@ class Works:
             Expects a tuple variable """
         return await self.entities.filter(self.entity, filters)
 
+    def fetch_works(filters: list[tuple[str, str]]) -> pd.DataFrame:
+        """ Enter filters in a list: [("institution_id", "i145872427")] """
+        async def _run():
+            async with Session() as aio_session:
+                request = ApiRequestAsync(session=aio_session)
+                works = Works()
+                works.entities.request = request
+                results = []
+                async for item in await works.filter(filters):
+                    results.append(item)
+                return results
+
+        return pd.DataFrame(asyncio.run(_run()))
+
 
 class Institution:
     RADBOUD_ID = "i145872427"
@@ -309,10 +322,10 @@ class Excel:
 class Batch:
     BATCH_SIZE = 50
 
-    def __init__(self, df: pd.DataFrame, column_name: str, works = Works(), batch_size=None):
+    def __init__(self, df: pd.DataFrame, column_name: str, works_instance = Works, batch_size=None):
         self.df = df
         self.column_name = column_name
-        self.works_instance = works
+        self.works_instance = works_instance
         self.batch_size = self.BATCH_SIZE or batch_size
 
     def generate_batches(self) -> Generator[List[str], None, None]:
@@ -356,10 +369,12 @@ class Batch:
                 update_fn(self.df, doi, result)
 
 if __name__ == "__main__":
-    # work = Works()
-    # works_data = work.filter([("institutions.id","i145872427"),("from_publication_date","2024-10-01"),("is_corresponding","true")])
-    # df = pd.DataFrame(works_data)
-    # works_data = works_data[0:5]
+    df = Works.fetch_works([
+        ("institutions.id", "i145872427"),
+        ("from_publication_date", "2024-10-01"),
+        ("is_corresponding", "true")
+    ])
+
     """ 
 
     Class DataExtracter/DoiEnricher maken
@@ -405,7 +420,7 @@ if __name__ == "__main__":
                 df.at[index, "referenced_works_count"] = referenced_works_count
 
 
-    asyncio.run(enrich_doi(df))
+    #asyncio.run(enrich_doi(df))
 
     # Save the updated DataFrame
     df.to_excel("UKBsis_Publication_Details_Updated.xlsx", index=False)
