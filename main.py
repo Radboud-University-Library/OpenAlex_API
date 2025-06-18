@@ -4,11 +4,11 @@ import json
 from datetime import datetime
 import aiohttp
 import asyncio
-from typing import List, Generator, AsyncGenerator
+from typing import List, Generator, AsyncGenerator, Awaitable, Callable
 from urllib.parse import quote
 import time
 from email.utils import parsedate_to_datetime
-from typing import Callable
+
 
 radboud = "i145872427"
 ror = "016xsfp80"
@@ -132,53 +132,50 @@ class Filter:
 
 
 class Entities:
-    def __init__(self):
-        self.request = ApiRequestAsync()
+    def __init__(self, entity_type: str, request=None):
+        self.entity_type = entity_type
+        self.request = request or ApiRequestAsync()
         self.filter_instance = Filter()
 
-    async def get_entity(self, endpoint: str):
-        """ Get single entity """
-        return await self.request.get_data(endpoint)
+    async def get(self, input):
+        if isinstance(input, str):
+            if input.lower().startswith("10."):
+                endpoint = Doi.build_endpoint(input)
+                return await self.request.get_data(endpoint)
+            else:
+                endpoint = f"{self.entity_type}/{input}"
+                return await self.request.get_data(endpoint)
 
-    async def get_multiple_entities(self, endpoint: str) -> AsyncGenerator[dict, None]:
-        """Get multiple entities as an async generator."""
-        results = await self.request.get_results_data(endpoint)
-        for result in results:
-            yield result
+        elif isinstance(input, list):
+            if all(isinstance(i, tuple) for i in input):
+                endpoint = f"{self.entity_type}{self.filter_instance.filter_attributes(input)}"
+                results = await self.request.get_results_data(endpoint)
+                return results
+            elif all(isinstance(i, str) for i in input):
+                endpoint = Doi.batch_endpoint(input)
+                results = await self.request.get_results_data(endpoint)
+                return results
+            else:
+                raise ValueError("Unsupported input list type for get()")
 
-    async def filter(self, entity_type: str, filters: List[tuple[str, str]]) -> AsyncGenerator[dict, None]:
-        """Create filter endpoint. Receives entity type from calling class."""
-        if not isinstance(filters, (list, tuple)):
-            raise ValueError("Filters must be a list or tuple of key-value pairs")
-        endpoint = f"{entity_type}{self.filter_instance.filter_attributes(filters)}"
-        return self.get_multiple_entities(endpoint)
+        else:
+            raise ValueError("Unsupported input type for get()")
 
 
 class Works:
-    def __init__(self):
-        self.entities = Entities()
-        self.entity = "works"
+    def __init__(self, request=None):
+        self.entities = Entities("works", request=request)
 
     def __getattr__(self, name):
-        """ Delegates dynamic method calls to Entities class """
         return getattr(self.entities, name)
 
-    async def filter(self, filters):
-        """ Call Filter method from Entities class for list filters and adds entity type.
-            Expects a tuple variable """
-        return await self.entities.filter(self.entity, filters)
-
-    def fetch_works(filters: list[tuple[str, str]]):
-        """ Enter filters in a list: [("institution_id", "i145872427")] """
+    @staticmethod
+    def get(input):
         async def _run():
             async with Session() as aio_session:
                 request = ApiRequestAsync(session=aio_session)
-                works = Works()
-                works.entities.request = request
-                results = []
-                async for item in await works.filter(filters):
-                    results.append(item)
-                return results
+                entities = Entities("works", request=request)
+                return await entities.get(input)
         return asyncio.run(_run())
 
 
@@ -230,11 +227,10 @@ class Doi:
 
     @staticmethod
     def batch_endpoint(doi_batch: List[str]) -> str:
-        """Build batch endpoint while preserving | in DOIs."""
+        """Build batch endpoint with raw, normalized DOIs separated by |"""
         normalized_dois = [Doi.normalize_doi(doi) for doi in doi_batch]
-        encoded_dois = [quote(doi, safe="|") for doi in normalized_dois]
-        doi_batch_query = "|".join(encoded_dois)
-        return f"works?filter=doi:{doi_batch_query}"
+        joined = "|".join(normalized_dois)
+        return f"works?filter=doi:{joined}"
 
 
 class Excel:
@@ -284,8 +280,9 @@ class Batch:
         """Attempt batch fetch, fallback to singles if necessary."""
         endpoint = Doi.batch_endpoint(batch)
         try:
-            response = await self.works_instance.get_entity(endpoint)
-            results = response.get("results", [])
+            results = []
+            async for item in self.works_instance.get_multiple_entities(endpoint):
+                results.append(item)
             result_map = {r.get("doi", "").lower(): r for r in results}
             return [(doi, result_map.get(doi.lower())) for doi in batch]
         except Exception as e:
@@ -293,29 +290,34 @@ class Batch:
             return [await self.process_single_doi(doi) for doi in batch]
 
     async def run(
-        self,
-        update_fn: Callable[[pd.DataFrame, str, dict | None], None]
+            self,
+            update_fn: Callable[[pd.DataFrame, str, dict | None], Awaitable[None]]
     ):
-        """Run all batches and call update_fn for each DOI result."""
         all_batches = [self.process_batch(batch) for batch in self.generate_batches()]
         results_nested = await asyncio.gather(*all_batches)
-
         for batch_result in results_nested:
+            print(batch_result)
             for doi, result in batch_result:
-                update_fn(self.df, doi, result)
+                await update_fn(self.df, doi, result)
+
 
 if __name__ == "__main__":
-    #works = Works.fetch_works([
-    #    ("institutions.id", "i145872427"),
-    #    ("from_publication_date", "2024-10-01"),
+    #work = Works.get("W2125284466")
+    #print(work)
+    #works = Works.get([
+    #   ("institutions.id", "i145872427"),
+    #   ("from_publication_date", "2024-10-01"),
     #    ("is_corresponding", "true")
     #])
     #print(works)
-
+    doi_list = Works.get([
+    "10.1016/J.PATTER.2022.100639",
+    "10.1016/J.TRECAN.2024.08.008"
+    ])
+    print(doi_list)
     """ 
-    Class DataExtracter/DoiEnricher maken
-    Batches toevoegen
     Class Batch maken
+    Class DataExtracter/DoiEnricher maken
     process single doi uit batch class halen? Dubbelop?
     """
 
@@ -326,37 +328,33 @@ if __name__ == "__main__":
     df["referenced_works_count"] = None
 
 
-    async def fetch_and_prepare_result(works, doi, index):
-        doi_endpoint = Doi.build_endpoint(doi)
+    async def update_fn(df: pd.DataFrame, doi: str, result: dict | None):
+        """Custom update logic for each DOI result."""
+        if result:
+            doi_normalized = doi.strip().lower()
+            df["DOI_normalized"] = df["DOI"].astype(str).str.strip().str.lower()
+            match = df[df["DOI_normalized"] == doi_normalized]
+            if not match.empty:
+                idx = match.index[0]
+                df.at[idx, "cited_by_count"] = result.get("cited_by_count")
+                df.at[idx, "referenced_works_count"] = result.get("referenced_works_count")
+            else:
+                print(f" No match found in DataFrame for DOI: {doi}")
+        else:
+            print(f" No result for DOI: {doi}")
 
-        try:
-            result = await works.get_entity(doi_endpoint)
-            if result is None:
-                return index, "No data", "No data"
-            return index, result.get("cited_by_count"), result.get("referenced_works_count")
-        except Exception as e:
-            print(f"Error for DOI {doi}: {e}")
-            return index, "Error", "Error"
-
-
-    async def enrich_doi(df):
-        async with Session(email="sjors.startman@ru.nl") as aio_session:
+    async def enrich_with_batches(df: pd.DataFrame):
+        async with Session() as aio_session:
             request = ApiRequestAsync(session=aio_session)
             works = Works()
-            works.entities.request = request  # Inject the session-bound requester
+            works.entities.request = request  # Inject session into Works
 
-            tasks = [
-                fetch_and_prepare_result(works, row['DOI'], index)
-                for index, row in df.iterrows()
-            ]
-            results = await asyncio.gather(*tasks)
-
-            for index, cited_by_count, referenced_works_count in results:
-                df.at[index, "cited_by_count"] = cited_by_count
-                df.at[index, "referenced_works_count"] = referenced_works_count
+            batcher = Batch(df=df, column_name="DOI", works_instance=works)
+            await batcher.run(update_fn=update_fn)
 
 
-    asyncio.run(enrich_doi(df))
+    # Run the async job
+    #asyncio.run(enrich_with_batches(df))
 
     # Save the updated DataFrame
     df.to_excel("UKBsis_Publication_Details_Updated.xlsx", index=False)
