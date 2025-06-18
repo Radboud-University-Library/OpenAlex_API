@@ -1,11 +1,9 @@
-import requests
 import pandas as pd
 import json
 from datetime import datetime
 import aiohttp
 import asyncio
-from typing import List, Generator, AsyncGenerator, Awaitable, Callable
-from urllib.parse import quote
+from typing import List, Generator, Awaitable, Callable
 import time
 from email.utils import parsedate_to_datetime
 
@@ -151,10 +149,12 @@ class Entities:
                 endpoint = f"{self.entity_type}{self.filter_instance.filter_attributes(input)}"
                 results = await self.request.get_results_data(endpoint)
                 return results
+
             elif all(isinstance(i, str) for i in input):
-                endpoint = Doi.batch_endpoint(input)
-                results = await self.request.get_results_data(endpoint)
-                return results
+                endpoint = f"{self.entity_type}{Doi.batch_endpoint(input)}"
+                results = await self.request.get_data(endpoint)
+                return results.get("results", []) if results else []
+
             else:
                 raise ValueError("Unsupported input list type for get()")
 
@@ -226,11 +226,9 @@ class Doi:
         return f"works/https://doi.org/{doi}"
 
     @staticmethod
-    def batch_endpoint(doi_batch: List[str]) -> str:
-        """Build batch endpoint with raw, normalized DOIs separated by |"""
-        normalized_dois = [Doi.normalize_doi(doi) for doi in doi_batch]
-        joined = "|".join(normalized_dois)
-        return f"works?filter=doi:{joined}"
+    def batch_endpoint(dois: List[str]) -> str:
+        doi_filter = "|".join([doi.strip() for doi in dois])
+        return f"?filter=doi:{doi_filter}"
 
 
 class Excel:
@@ -252,54 +250,78 @@ class Excel:
 
 
 class Batch:
-    BATCH_SIZE = 50
+    BATCH_SIZE = 25
 
-    def __init__(self, df: pd.DataFrame, column_name: str, works_instance: Works, batch_size: int = None):
+    def __init__(self, df: pd.DataFrame, column_name: str, entities_instance: Entities, batch_size: int = None):
         self.df = df
         self.column_name = column_name
-        self.works_instance = works_instance
+        self.entities = entities_instance
         self.batch_size = batch_size or self.BATCH_SIZE
+        self.total_processed = 0
+        self.total_dois = len(list(dict.fromkeys(self.df[self.column_name].dropna().tolist())))
+        self.start_time = time.time()
 
     def generate_batches(self) -> Generator[List[str], None, None]:
-        """Yield batches of DOIs from the DataFrame."""
-        record_list = self.df[self.column_name].dropna().tolist()
+        record_list = list(dict.fromkeys(self.df[self.column_name].dropna().tolist()))
         for i in range(0, len(record_list), self.batch_size):
             yield record_list[i:i + self.batch_size]
 
-    async def process_single_doi(self, doi: str) -> tuple[str, dict | None]:
-        """Request a single DOI if batch fails."""
-        endpoint = Doi.build_endpoint(doi)
-        try:
-            data = await self.works_instance.get_entity(endpoint)
-            return doi, data
-        except Exception as e:
-            print(f"Failed to fetch {doi}: {e}")
-            return doi, None
-
     async def process_batch(self, batch: List[str]) -> List[tuple[str, dict | None]]:
-        """Attempt batch fetch, fallback to singles if necessary."""
-        endpoint = Doi.batch_endpoint(batch)
+        """Process a batch of DOIs using entities.get()."""
+        batch_start = time.time()
+
         try:
-            results = []
-            async for item in self.works_instance.get_multiple_entities(endpoint):
-                results.append(item)
-            result_map = {r.get("doi", "").lower(): r for r in results}
-            return [(doi, result_map.get(doi.lower())) for doi in batch]
+            results = await self.entities.get(batch)
+
+            result_map = {
+                r.get("doi", "").lower().replace("https://doi.org/", ""): r
+                for r in results
+            }
+
+            batch_results = [
+                (Doi.normalize_doi(doi), result_map.get(Doi.normalize_doi(doi)))
+                for doi in batch
+            ]
+
+            self.total_processed += len(batch_results)
+
+            elapsed = time.time() - self.start_time
+            avg_time_per_doi = elapsed / self.total_processed if self.total_processed else 0
+            remaining_dois = self.total_dois - self.total_processed
+            eta = remaining_dois * avg_time_per_doi
+
+            print(f"Finished batch: {self.total_processed}/{self.total_dois} DOIs processed "
+                  f"(Batch time: {time.time() - batch_start:.1f}s, ETA: {eta/60:.1f} min)")
+
+            return batch_results
+
         except Exception as e:
-            print(f"Batch failed, falling back to singles: {e}")
-            return [await self.process_single_doi(doi) for doi in batch]
+            print(f"Batch failed: {e}")
+            batch_results = [(doi, None) for doi in batch]
 
-    async def run(
-            self,
-            update_fn: Callable[[pd.DataFrame, str, dict | None], Awaitable[None]]
-    ):
-        all_batches = [self.process_batch(batch) for batch in self.generate_batches()]
-        results_nested = await asyncio.gather(*all_batches)
-        for batch_result in results_nested:
-            print(batch_result)
-            for doi, result in batch_result:
+            self.total_processed += len(batch_results)
+
+            elapsed = time.time() - self.start_time
+            avg_time_per_doi = elapsed / self.total_processed if self.total_processed else 0
+            remaining_dois = self.total_dois - self.total_processed
+            eta = remaining_dois * avg_time_per_doi
+
+            print(f"Finished failed batch: {self.total_processed}/{self.total_dois} DOIs processed "
+                  f"(Batch time: {time.time() - batch_start:.1f}s, ETA: {eta/60} min)")
+
+            return batch_results
+
+    async def run(self, update_fn: Callable[[pd.DataFrame, str, dict | None], Awaitable[None]]):
+        batch_tasks = [
+            self.process_batch(batch)
+            for batch in self.generate_batches()
+        ]
+
+        all_results = await asyncio.gather(*batch_tasks)
+
+        for batch_results in all_results:
+            for doi, result in batch_results:
                 await update_fn(self.df, doi, result)
-
 
 if __name__ == "__main__":
     #work = Works.get("W2125284466")
@@ -310,51 +332,52 @@ if __name__ == "__main__":
     #    ("is_corresponding", "true")
     #])
     #print(works)
-    doi_list = Works.get([
-    "10.1016/J.PATTER.2022.100639",
-    "10.1016/J.TRECAN.2024.08.008"
-    ])
-    print(doi_list)
+    #doi_list = Works.get([
+    #"10.1016/J.PATTER.2022.100639",
+    #"10.1016/J.TRECAN.2024.08.008"
+    #])
+    #print(doi_list)
     """ 
-    Class Batch maken
-    Class DataExtracter/DoiEnricher maken
-    process single doi uit batch class halen? Dubbelop?
+    NO result opvangen
     """
 
     df = pd.read_excel("UKBsis Publication Details.xlsx")
-    df = df.head(500)
+    df = df.head(5000)
+
     # Initialize new columns
     df["cited_by_count"] = None
     df["referenced_works_count"] = None
 
 
+    # Define update_fn
     async def update_fn(df: pd.DataFrame, doi: str, result: dict | None):
-        """Custom update logic for each DOI result."""
         if result:
             doi_normalized = doi.strip().lower()
             df["DOI_normalized"] = df["DOI"].astype(str).str.strip().str.lower()
             match = df[df["DOI_normalized"] == doi_normalized]
             if not match.empty:
-                idx = match.index[0]
-                df.at[idx, "cited_by_count"] = result.get("cited_by_count")
-                df.at[idx, "referenced_works_count"] = result.get("referenced_works_count")
+                df.loc[df["DOI_normalized"] == doi_normalized, "cited_by_count"] = result.get("cited_by_count")
+                df.loc[df["DOI_normalized"] == doi_normalized, "referenced_works_count"] = result.get(
+                    "referenced_works_count")
+
             else:
                 print(f" No match found in DataFrame for DOI: {doi}")
         else:
             print(f" No result for DOI: {doi}")
 
+
+    # Main async runner
     async def enrich_with_batches(df: pd.DataFrame):
         async with Session() as aio_session:
             request = ApiRequestAsync(session=aio_session)
-            works = Works()
-            works.entities.request = request  # Inject session into Works
+            entities = Entities("works", request=request)
 
-            batcher = Batch(df=df, column_name="DOI", works_instance=works)
+            batcher = Batch(df=df, column_name="DOI", entities_instance=entities)
             await batcher.run(update_fn=update_fn)
 
 
-    # Run the async job
-    #asyncio.run(enrich_with_batches(df))
+    # Run
+    asyncio.run(enrich_with_batches(df))
 
     # Save the updated DataFrame
     df.to_excel("UKBsis_Publication_Details_Updated.xlsx", index=False)
