@@ -6,6 +6,7 @@ import asyncio
 from typing import List, Generator, Awaitable, Callable
 import time
 from email.utils import parsedate_to_datetime
+import math
 
 
 radboud = "i145872427"
@@ -58,23 +59,29 @@ class ApiRequestAsync:
                                 wait_time = max((retry_dt - now_dt).total_seconds(), 1)
                             backoff = 2 ** attempt
                             wait_time += backoff
-                            print(f"429 Too Many Requests at: {full_url}. Retrying after {wait_time:.2f} seconds (backoff x{backoff})...")
+                            print(f"429 Too Many Requests at: {full_url}. Retrying after {wait_time:.2f}s...")
                             await asyncio.sleep(wait_time)
                             continue
-                        elif response.status == 404:
-                            print(f"Error 404: Not found: {endpoint}")
-                            return None
-                        elif response.status != 200:
-                            text = await response.text()
-                            print(f"HTTP Error {response.status}: {text}")
-                            response.raise_for_status()
 
+                        # Raise for all HTTP errors (including 404)
+                        response.raise_for_status()
+
+                        # Success
                         return await response.json()
 
+                except aiohttp.ClientResponseError as e:
+                    if e.status == 404:
+                        print(f"HTTP error {e.status}: {e.message}. {endpoint}")
+                        raise
+                    else:
+                        print(f"HTTP error {e.status}: {e.message}. {endpoint} (attempt {attempt + 1})")
+                        await asyncio.sleep(1 + attempt)
+
                 except aiohttp.ClientError as e:
-                    print(f"Connection error on attempt {attempt + 1}: {e}")
+                    print(f"Connection error (attempt {attempt + 1}): {e}")
                     await asyncio.sleep(1 + attempt)
 
+        # If all retries fail:
         return None
 
     async def get_meta_data(self, endpoint):
@@ -218,7 +225,7 @@ class Doi:
     def normalize_doi(doi):
         if not isinstance(doi, str) or not doi.strip():
             raise ValueError("DOI must be a non-empty string.")
-        return doi.strip().lower()
+        return doi.strip().lower().rstrip('.')
 
     @staticmethod
     def build_endpoint(doi):
@@ -266,9 +273,31 @@ class Batch:
         for i in range(0, len(record_list), self.batch_size):
             yield record_list[i:i + self.batch_size]
 
-    async def process_batch(self, batch: List[str]) -> List[tuple[str, dict | None]]:
-        """Process a batch of DOIs using entities.get()."""
+    async def retry_single_doi(self, doi: str) -> tuple[str, dict | None | str]:
+        doi_norm = Doi.normalize_doi(doi)
+
+        try:
+            single_result = await self.entities.get(doi)
+
+            if single_result:
+                return (doi_norm, single_result)
+            else:
+                return (doi_norm, "invalid input")
+
+        except aiohttp.ClientResponseError as e2:
+            if e2.status == 404:
+                return (doi_norm, "404 error")
+            else:
+                print(f"HTTP error {e2.status} for DOI {doi_norm}")
+                return (doi_norm, None)
+
+        except Exception as ex:
+            print(f"Retry failed for DOI {doi_norm}: {ex}")
+            return (doi_norm, None)
+
+    async def process_batch(self, batch: List[str]) -> List[tuple[str, dict | None | str]]:
         batch_start = time.time()
+        updated_batch = []
 
         try:
             results = await self.entities.get(batch)
@@ -278,50 +307,51 @@ class Batch:
                 for r in results
             }
 
-            batch_results = [
-                (Doi.normalize_doi(doi), result_map.get(Doi.normalize_doi(doi)))
-                for doi in batch
-            ]
+            for doi in batch:
+                doi_norm = Doi.normalize_doi(doi)
+                result = result_map.get(doi_norm)
 
-            self.total_processed += len(batch_results)
-
-            elapsed = time.time() - self.start_time
-            avg_time_per_doi = elapsed / self.total_processed if self.total_processed else 0
-            remaining_dois = self.total_dois - self.total_processed
-            eta = remaining_dois * avg_time_per_doi
-
-            print(f"Finished batch: {self.total_processed}/{self.total_dois} DOIs processed "
-                  f"(Batch time: {time.time() - batch_start:.1f}s, ETA: {eta/60:.1f} min)")
-
-            return batch_results
+                if result is not None:
+                    updated_batch.append((doi_norm, result))
+                else:
+                    updated_batch.append(await self.retry_single_doi(doi))
 
         except Exception as e:
-            print(f"Batch failed: {e}")
-            batch_results = [(doi, None) for doi in batch]
+            print(f"Batch failed: {e} — retrying DOIs individually...")
+            updated_batch = [await self.retry_single_doi(doi) for doi in batch]
 
-            self.total_processed += len(batch_results)
+        # update progress
+        self.total_processed += len(batch)
+        elapsed = time.time() - self.start_time
+        avg_time_per_doi = elapsed / self.total_processed if self.total_processed else 0
+        remaining_dois = self.total_dois - self.total_processed
+        eta_minutes = math.ceil(remaining_dois * avg_time_per_doi / 60)
 
-            elapsed = time.time() - self.start_time
-            avg_time_per_doi = elapsed / self.total_processed if self.total_processed else 0
-            remaining_dois = self.total_dois - self.total_processed
-            eta = remaining_dois * avg_time_per_doi
+        print(f"Finished batch: {self.total_processed}/{self.total_dois} DOIs processed "
+              f"(Batch time: {time.time() - batch_start:.1f}s, ETA: {eta_minutes} min)")
 
-            print(f"Finished failed batch: {self.total_processed}/{self.total_dois} DOIs processed "
-                  f"(Batch time: {time.time() - batch_start:.1f}s, ETA: {eta/60} min)")
+        return updated_batch
 
-            return batch_results
+    async def run(self, update_fn):
+        for batch in self.generate_batches():
+            success = False
+            retries = 0
+            max_retries = 3
 
-    async def run(self, update_fn: Callable[[pd.DataFrame, str, dict | None], Awaitable[None]]):
-        batch_tasks = [
-            self.process_batch(batch)
-            for batch in self.generate_batches()
-        ]
+            while not success and retries < max_retries:
+                batch_results = await self.process_batch(batch)
 
-        all_results = await asyncio.gather(*batch_tasks)
+                if batch_results is not None:
+                    for doi, result in batch_results:
+                        await update_fn(self.df, doi, result)
 
-        for batch_results in all_results:
-            for doi, result in batch_results:
-                await update_fn(self.df, doi, result)
+                    success = True
+
+                else:
+                    retries += 1
+                    print(f"Retrying batch ({retries}/{max_retries})...")
+                    await asyncio.sleep(2 ** retries)
+
 
 if __name__ == "__main__":
     #work = Works.get("W2125284466")
@@ -342,7 +372,7 @@ if __name__ == "__main__":
     """
 
     df = pd.read_excel("UKBsis Publication Details.xlsx")
-    df = df.head(5000)
+    df = df.iloc[10000:20000]
 
     # Initialize new columns
     df["cited_by_count"] = None
@@ -350,20 +380,27 @@ if __name__ == "__main__":
 
 
     # Define update_fn
-    async def update_fn(df: pd.DataFrame, doi: str, result: dict | None):
-        if result:
-            doi_normalized = doi.strip().lower()
-            df["DOI_normalized"] = df["DOI"].astype(str).str.strip().str.lower()
-            match = df[df["DOI_normalized"] == doi_normalized]
-            if not match.empty:
-                df.loc[df["DOI_normalized"] == doi_normalized, "cited_by_count"] = result.get("cited_by_count")
-                df.loc[df["DOI_normalized"] == doi_normalized, "referenced_works_count"] = result.get(
-                    "referenced_works_count")
+    async def update_fn(df: pd.DataFrame, doi: str, result: dict | None | str):
+        doi_normalized = doi.strip().lower()
 
-            else:
-                print(f" No match found in DataFrame for DOI: {doi}")
+        # Add normalized column (do this only once if not already present)
+        if "DOI_normalized" not in df.columns:
+            df["DOI_normalized"] = df["DOI"].astype(str).apply(Doi.normalize_doi)
+
+        matching_rows = df[df["DOI_normalized"] == doi_normalized]
+
+        if matching_rows.empty:
+            print(f"No match found in DataFrame for DOI: {doi}")
+            return
+
+        elif result == "404 error":
+            df.loc[matching_rows.index, "cited_by_count"] = "URL not found"
+            df.loc[matching_rows.index, "referenced_works_count"] = "URL not found"
+
         else:
-            print(f" No result for DOI: {doi}")
+            # Valid result, update cited_by_count and referenced_works_count
+            df.loc[matching_rows.index, "cited_by_count"] = result.get("cited_by_count")
+            df.loc[matching_rows.index, "referenced_works_count"] = result.get("referenced_works_count")
 
 
     # Main async runner
