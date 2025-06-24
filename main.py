@@ -15,7 +15,7 @@ if __name__ == "__main__":
 
 
     df = pd.read_excel("UKBsis Publication Details.xlsx")
-    df = df.iloc[0:1000]
+
 
     # Initialize new columns
     df["cited_by_count"] = None
