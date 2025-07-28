@@ -126,4 +126,4 @@ class BatchProcessor:
 
     async def _update_dataframe(self, batch_results: List[tuple[str, dict | None | str]], update_fn):
         for doi, result in batch_results:
-            await update_fn(self.df, doi, result)
+            await update_fn(doi, result)
