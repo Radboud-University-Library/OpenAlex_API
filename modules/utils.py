@@ -39,3 +39,14 @@ class Doi:
     def batch_endpoint(dois: List[str]) -> str:
         doi_filter = "|".join([doi.strip() for doi in dois])
         return f"?filter=doi:{doi_filter}"
+
+
+class Filter:
+    @staticmethod
+    def filter_attributes(filters: list[tuple[str, str]]) -> str:
+        if not isinstance(filters, (list, tuple)):
+            raise ValueError("Filters must be a list or tuple of key-value pairs")
+
+        filter_strings = [f"{attribute}:{value}" for attribute, value in filters]
+        filter_endpoint = "?filter=" + ",".join(filter_strings)
+        return filter_endpoint

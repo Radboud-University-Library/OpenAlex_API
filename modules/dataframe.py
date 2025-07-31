@@ -1,8 +1,8 @@
 import pandas as pd
-from modules.api import ApiRequest, Entities, Session
 from modules.batcher import BatchProcessor
 from modules.utils import Doi
 from modules.runners import Runner
+
 
 
 
@@ -30,24 +30,21 @@ class DataFrameUpdater:
 
 
 class DataFrameEnricher:
-    def __init__(self, df: pd.DataFrame, keys: list[str]):
+    def __init__(self, df: pd.DataFrame, keys: list[str], entities_instance):
         self.df = df
         self.updater = DataFrameUpdater(df, keys)
+        self.entities = entities_instance
 
-    async def enrich(self, entity_type: str, column_name: str, batch_size: int = None, max_parallel_batches: int = None):
+    async def enrich(self, column_name: str, batch_size: int = None, max_parallel_batches: int = None):
         batch_size = batch_size or Runner.BATCH_SIZE
         max_parallel_batches = max_parallel_batches or Runner.MAX_PARALLEL_BATCHES
 
-        async with Session() as aio_session:
-            request = ApiRequest(session=aio_session)
-            entities = Entities(entity_type, request=request)
-
-            batcher = BatchProcessor(
-                df=self.df,
-                column_name=column_name,
-                entities_instance=entities,
-                batch_size=batch_size,
-                max_parallel_batches=max_parallel_batches
+        batcher = BatchProcessor(
+            df=self.df,
+            column_name=column_name,
+            entities_instance=self.entities,
+            batch_size=batch_size,
+            max_parallel_batches=max_parallel_batches
             )
 
-            await Runner.run_batches(batcher, self.updater.update)
+        await Runner.run_batches(batcher, self.updater.update)

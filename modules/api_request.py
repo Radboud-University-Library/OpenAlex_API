@@ -3,7 +3,6 @@ import asyncio
 import time
 from email.utils import parsedate_to_datetime
 from datetime import datetime
-from modules.utils import Doi
 
 
 class ApiRequest:
@@ -97,17 +96,6 @@ class ApiRequest:
         return f"{endpoint}&per_page={self.per_page}&cursor={cursor}"
 
 
-class Filter:
-    @staticmethod
-    def filter_attributes(filters: list[tuple[str, str]]) -> str:
-        if not isinstance(filters, (list, tuple)):
-            raise ValueError("Filters must be a list or tuple of key-value pairs")
-
-        filter_strings = [f"{attribute}:{value}" for attribute, value in filters]
-        filter_endpoint = "?filter=" + ",".join(filter_strings)
-        return filter_endpoint
-
-
 class Session:
     EMAIL = "sjors.startman@ru.nl"
 
@@ -124,57 +112,3 @@ class Session:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.session.close()
 
-
-class Entities:
-    def __init__(self, entity_type: str, request=None):
-        self.entity_type = entity_type
-        self.request = request or ApiRequest()
-        self.filter_instance = Filter()
-
-    async def get(self, input):
-        if isinstance(input, str):
-            return await self._get_from_string(input)
-        elif isinstance(input, list):
-            return await self._get_from_list(input)
-        else:
-            raise ValueError("Unsupported input type for get()")
-
-    async def _get_from_string(self, input):
-        if input.lower().startswith("10."):
-            endpoint = Doi.build_endpoint(input)
-        else:
-            endpoint = f"{self.entity_type}/{input}"
-        return await self.request.get_data(endpoint)
-
-    async def _get_from_list(self, input_list):
-        if all(isinstance(i, tuple) for i in input_list):
-            endpoint = f"{self.entity_type}{self.filter_instance.filter_attributes(input_list)}"
-            return await self.request.get_results_data(endpoint)
-        elif all(isinstance(i, str) for i in input_list):
-            endpoint = f"{self.entity_type}{Doi.batch_endpoint(input_list)}"
-            response = await self.request.get_data(endpoint)
-            return response.get("results", []) if response else []
-        else:
-            raise ValueError("Unsupported input list type for get()")
-
-
-class Works:
-    def __init__(self, request=None):
-        self.entities = Entities("works", request=request)
-
-    def __getattr__(self, name):
-        return getattr(self.entities, name)
-
-    @staticmethod
-    def get(input):
-        async def _run():
-            async with Session() as aio_session:
-                request = ApiRequest(session=aio_session)
-                entities = Entities("works", request=request)
-                return await entities.get(input)
-        return asyncio.run(_run())
-
-
-if __name__ == "__main__":
-    work = Works.get("W2125284466")
-    print(work)

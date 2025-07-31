@@ -1,8 +1,8 @@
+from __future__ import annotations
 from modules.utils import Doi
 import pandas as pd
 import math
 from typing import List, Generator
-from modules.api import Entities
 import time
 import aiohttp
 import asyncio
@@ -11,7 +11,7 @@ import asyncio
 class BatchProcessor:
     BATCH_SIZE = 25
 
-    def __init__(self, df: pd.DataFrame, column_name: str, entities_instance: Entities, batch_size: int = None, max_parallel_batches: int = 5):
+    def __init__(self, df: pd.DataFrame, column_name: str, entities_instance: "Entities", batch_size: int = None, max_parallel_batches: int = 5):
         self.df = df
         self.column_name = column_name
         self.entities = entities_instance
