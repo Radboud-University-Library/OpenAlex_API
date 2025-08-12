@@ -1,8 +1,8 @@
 import pandas as pd
+import json
 from modules.batcher import BatchProcessor
-from modules.utils import Doi
+from modules.utils import Doi, Keys
 from modules.runners import Runner
-
 
 
 
@@ -25,8 +25,19 @@ class DataFrameUpdater:
                 self.df[key] = None
 
         value = "URL not found" if result == "404 error" else result
+
         for key in self.keys:
-            self.df.loc[matching_rows.index, key] = value.get(key) if isinstance(value, dict) else value
+            if isinstance(value, dict):
+                if (
+                        key in value
+                        and not isinstance(value[key], (str, int, float, bool))
+                ):
+                    self.df.loc[matching_rows.index, key] = json.dumps(value[key])
+                else:
+                    nested_value = Keys.get_nested(value, key)
+                    self.df.loc[matching_rows.index, key] = nested_value
+            else:
+                self.df.loc[matching_rows.index, key] = value
 
 
 class DataFrameEnricher:

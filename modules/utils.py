@@ -50,3 +50,23 @@ class Filter:
         filter_strings = [f"{attribute}:{value}" for attribute, value in filters]
         filter_endpoint = "?filter=" + ",".join(filter_strings)
         return filter_endpoint
+
+
+class Keys:
+    @staticmethod
+    def get_nested(data, key_path):
+        """
+        Access nested dictionary/list data using dot notation and [0] list access.
+        Example: 'authorships[0].author.display_name'
+        """
+        try:
+            parts = key_path.replace("[", ".").replace("]", "").split(".")
+            for part in parts:
+                if isinstance(data, list):
+                    part = int(part)
+                    data = data[part]
+                else:
+                    data = data.get(part)
+            return data
+        except (TypeError, KeyError, IndexError, ValueError, AttributeError):
+            return "Key not found"

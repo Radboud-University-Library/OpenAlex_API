@@ -3,7 +3,10 @@ import asyncio
 import time
 from email.utils import parsedate_to_datetime
 from datetime import datetime
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
 
 class ApiRequest:
     BASE_URL = "https://api.openalex.org/"
@@ -97,11 +100,9 @@ class ApiRequest:
 
 
 class Session:
-    EMAIL = "sjors.startman@ru.nl"
-
     def __init__(self, email=None):
         self.session = None
-        self.email = email or self.EMAIL
+        self.email = email or os.getenv("OPENALEX_EMAIL")
 
     async def __aenter__(self):
         self.session = aiohttp.ClientSession(

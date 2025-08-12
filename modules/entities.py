@@ -1,5 +1,6 @@
 import asyncio
 import pandas as pd
+import json
 from modules.api_request import ApiRequest, Session
 from modules.utils import Doi, Filter
 from modules.dataframe import DataFrameEnricher
@@ -76,7 +77,31 @@ class Works:
             enricher = DataFrameEnricher(df, keys, entities_instance=entities)
             await enricher.enrich(column_name=column_name)
 
+    @staticmethod
+    def keys(sample_id="W2125284466") -> list[str]:
+        """Returns all available (flattened) metadata keys from a sample work object."""
+        def extract_keys(obj, prefix=""):
+            keys = []
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    full_key = f"{prefix}.{k}" if prefix else k
+                    keys.append(full_key)
+                    keys.extend(extract_keys(v, prefix=full_key))
+            elif isinstance(obj, list) and obj:
+                keys.extend(extract_keys(obj[0], prefix=prefix + "[0]"))
+            return keys
+
+        async def _get_keys():
+            async with Session() as aio_session:
+                request = ApiRequest(session=aio_session)
+                work = await request.get_data(f"works/{sample_id}")
+                return extract_keys(work) if work else []
+
+        return asyncio.run(_get_keys())
+
 
 if __name__ == "__main__":
     work = Works.get("W2125284466")
     print(work)
+    print(work.keys())
+    print(json.dumps(work["cited_by_percentile_year"], indent=2))
