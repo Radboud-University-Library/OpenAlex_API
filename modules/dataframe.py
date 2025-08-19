@@ -1,16 +1,21 @@
 import pandas as pd
-import json
 from modules.batcher import BatchProcessor
 from modules.utils import Doi, Keys
 from modules.runners import Runner
-
+from modules.api import ApiRequest
 
 
 class DataFrameUpdater:
-    def __init__(self, df: pd.DataFrame, keys: list[str]):
+    def __init__(self, df: pd.DataFrame, keys: list[str], request: ApiRequest):
         self.df = df
         self.keys = keys
+        self.request = request
         self.doi_series = df["DOI"].astype(str).apply(Doi.normalize_doi)
+        self.url_cache = {}
+
+        for key in self.keys:
+            if key not in self.df.columns:
+                self.df[key] = None
 
     async def update(self, doi: str, result: dict | None | str):
         doi_norm = Doi.normalize_doi(doi)
@@ -20,30 +25,44 @@ class DataFrameUpdater:
             print(f"No match for DOI: {doi}")
             return
 
-        for key in self.keys:
-            if key not in self.df.columns:
-                self.df[key] = None
-
-        value = "URL not found" if result == "404 error" else result
+        if isinstance(result, str) and result == "404 error":
+            self._fill_all_keys(matching_rows.index, "URL not found")
+            return
 
         for key in self.keys:
-            if isinstance(value, dict):
-                if (
-                        key in value
-                        and not isinstance(value[key], (str, int, float, bool))
-                ):
-                    self.df.loc[matching_rows.index, key] = json.dumps(value[key])
-                else:
-                    nested_value = Keys.get_nested(value, key)
-                    self.df.loc[matching_rows.index, key] = nested_value
-            else:
-                self.df.loc[matching_rows.index, key] = value
+            value = await self._extract_value(result, key)
+            if isinstance(value, (dict, list)):
+                value = str(value)
+            self.df.loc[matching_rows.index, key] = value
+
+    def _fill_all_keys(self, index, value):
+        for key in self.keys:
+            self.df.loc[index, key] = value
+
+    async def _extract_value(self, data: dict, key: str):
+        if not isinstance(data, dict):
+            return data
+
+        raw_value = Keys.get_nested(data, key)
+
+        if isinstance(raw_value, str) and raw_value.startswith("https://api.openalex.org/"):
+            if raw_value in self.url_cache:
+                return self.url_cache[raw_value]
+            print(f"Key: {key} returns URL: {raw_value}. API request returns data.")
+            data = await self.request.get_url(raw_value)
+            self.url_cache[raw_value] = data
+            return data
+
+        if isinstance(raw_value, (dict, list)):
+            return raw_value
+
+        return raw_value
 
 
 class DataFrameEnricher:
     def __init__(self, df: pd.DataFrame, keys: list[str], entities_instance):
         self.df = df
-        self.updater = DataFrameUpdater(df, keys)
+        self.updater = DataFrameUpdater(df, keys, request=entities_instance.request)
         self.entities = entities_instance
 
     async def enrich(self, column_name: str, batch_size: int = None, max_parallel_batches: int = None):

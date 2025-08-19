@@ -84,7 +84,6 @@ class ApiRequest:
     async def get_results_data(self, endpoint):
         cursor = "*"
         all_results = []
-
         while cursor:
             paged_endpoint = self._build_paged_endpoint(endpoint, cursor)
             response = await self.get_data(paged_endpoint)
@@ -92,11 +91,22 @@ class ApiRequest:
                 break
             all_results.extend(response.get("results", []))
             cursor = response.get("meta", {}).get("next_cursor")
-
         return all_results
 
     def _build_paged_endpoint(self, endpoint, cursor):
         return f"{endpoint}&per_page={self.per_page}&cursor={cursor}"
+
+    async def get_url(self, url: str):
+        if not url.startswith(self.base_url):
+            print(f"Invalid OpenAlex URL: {url}")
+            return None
+        url = url.replace(self.base_url,"")
+        has_query = any(param in url for param in ["filter=", "search=", "cursor=", "per_page="])
+        if has_query:
+            data = await self.get_results_data(url)
+        else:
+            data = await self.get_data(url)
+        return data
 
 
 class Session:
@@ -106,10 +116,21 @@ class Session:
 
     async def __aenter__(self):
         self.session = aiohttp.ClientSession(
-            headers={"User-Agent": f"mailto:{self.email}"}
+            headers={"User-Agent": f"mailto:{self.email}"},
         )
         return self.session
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.session.close()
 
+
+if __name__ == "__main__":
+    async def main():
+        async with Session() as aio_session:
+            api = ApiRequest(session=aio_session)
+            #data = await api.get_data("works/W2125284466")
+            data = await api.get_results_data("works?filter=cites:W2058595066")
+            print(data)
+            #print(type(data))
+            #print(len(data))
+    asyncio.run(main())

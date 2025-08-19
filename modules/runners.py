@@ -1,5 +1,5 @@
 class Runner:
-    BATCH_SIZE = 25
+    BATCH_SIZE = 50
     MAX_PARALLEL_BATCHES = 5
 
     @staticmethod

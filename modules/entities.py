@@ -1,7 +1,6 @@
 import asyncio
 import pandas as pd
-import json
-from modules.api_request import ApiRequest, Session
+from modules.api import ApiRequest, Session
 from modules.utils import Doi, Filter
 from modules.dataframe import DataFrameEnricher
 
@@ -30,6 +29,7 @@ class Entities:
     async def _get_from_list(self, input_list):
         if all(isinstance(i, tuple) for i in input_list):
             endpoint = f"{self.entity_type}{self.filter_instance.filter_attributes(input_list)}"
+            print(endpoint)
             return await self.request.get_results_data(endpoint)
         elif all(isinstance(i, str) for i in input_list):
             endpoint = f"{self.entity_type}{Doi.batch_endpoint(input_list)}"
@@ -102,6 +102,7 @@ class Works:
 
 if __name__ == "__main__":
     work = Works.get("W2125284466")
-    print(work)
+    works = Works.get([("institutions.id", "i145872427"),("from_publication_date", "2025-08-01")])
+    print(works)
     print(work.keys())
-    print(json.dumps(work["cited_by_percentile_year"], indent=2))
+    #print(json.dumps(work["cited_by_percentile_year"], indent=2))

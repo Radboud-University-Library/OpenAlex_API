@@ -1,5 +1,6 @@
 from __future__ import annotations
 from modules.utils import Doi
+from modules.runners import Runner
 import pandas as pd
 import math
 from typing import List, Generator
@@ -9,18 +10,16 @@ import asyncio
 
 
 class BatchProcessor:
-    BATCH_SIZE = 25
-
     def __init__(self, df: pd.DataFrame, column_name: str, entities_instance: "Entities", batch_size: int = None, max_parallel_batches: int = 5):
         self.df = df
         self.column_name = column_name
         self.entities = entities_instance
-        self.batch_size = batch_size or self.BATCH_SIZE
+        self.batch_size = batch_size or Runner.BATCH_SIZE
         self.max_parallel_batches = max_parallel_batches
         self.total_processed = 0
         self.total_dois = self._count_unique_dois()
         self.start_time = time.time()
-        self._progress_lock = asyncio.Lock()  # Lock for updating progress safely
+        self._progress_lock = asyncio.Lock()
 
     def _count_unique_dois(self) -> int:
         return len(list(dict.fromkeys(self.df[self.column_name].dropna().tolist())))
@@ -125,5 +124,5 @@ class BatchProcessor:
                 await asyncio.sleep(2 ** retries)
 
     async def _update_dataframe(self, batch_results: List[tuple[str, dict | None | str]], update_fn):
-        for doi, result in batch_results:
-            await update_fn(doi, result)
+        await asyncio.gather(*(update_fn(doi, result) for doi, result in batch_results))
+
