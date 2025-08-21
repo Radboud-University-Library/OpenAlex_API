@@ -54,7 +54,7 @@ class Filter:
 
 class Keys:
     @staticmethod
-    def get_nested(data, key_path):
+    def get_nested_keys(data, key_path):
         """
         Access nested dictionary/list data using dot notation and [0] list access.
         Example: 'authorships[0].author.display_name'
@@ -70,3 +70,9 @@ class Keys:
             return data
         except (TypeError, KeyError, IndexError, ValueError, AttributeError):
             return "Key not found"
+
+class Url:
+    @staticmethod
+    def remove_url(value):
+        if isinstance(value, str) and value.startswith("https://openalex.org/"):
+            return value.replace("https://openalex.org/", "")

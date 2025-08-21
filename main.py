@@ -14,7 +14,7 @@ def main():
     keys = ["fwci",
             "cited_by_count",
             "referenced_works_count",
-            "cited_by_api_url",
+            "cited_by_api_url[ids.openalex]",
             "citation_normalized_percentile",
             "citation_normalized_percentile.value",
             "citation_normalized_percentile.is_in_top_1_percent",
