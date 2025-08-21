@@ -17,44 +17,14 @@ class BatchProcessor:
         self.batch_size = batch_size or Runner.BATCH_SIZE
         self.max_parallel_batches = max_parallel_batches
         self.total_processed = 0
-        self.total_dois = self._count_unique_dois()
+        self.unique_dois = Doi.unique_normalized_dois(self.df[self.column_name].dropna().tolist())
+        self.total_dois = len(self.unique_dois)
         self.start_time = time.time()
         self._progress_lock = asyncio.Lock()
 
-    def _count_unique_dois(self) -> int:
-        return len(list(dict.fromkeys(self.df[self.column_name].dropna().tolist())))
-
     def generate_batches(self) -> Generator[List[str], None, None]:
-        record_list = list(dict.fromkeys(self.df[self.column_name].dropna().tolist()))
-        for i in range(0, len(record_list), self.batch_size):
-            yield record_list[i:i + self.batch_size]
-
-    async def retry_single_doi(self, doi: str) -> tuple[str, dict | None | str]:
-        doi_norm = Doi.normalize_doi(doi)
-
-        try:
-            single_result = await self.entities.get(doi)
-            if single_result:
-                return (doi_norm, single_result)
-            else:
-                return (doi_norm, "invalid input")
-
-        except aiohttp.ClientResponseError as e2:
-            if e2.status == 404:
-                return (doi_norm, "404 error")
-            else:
-                print(f"HTTP error {e2.status} for DOI {doi_norm}")
-                return (doi_norm, None)
-
-        except Exception as ex:
-            print(f"Retry failed for DOI {doi_norm}: {ex}")
-            return (doi_norm, None)
-
-    def _map_results(self, results: List[dict]) -> dict:
-        return {
-            r.get("doi", "").lower().replace("https://doi.org/", ""): r
-            for r in results
-        }
+        for i in range(0, len(self.unique_dois), self.batch_size):
+            yield self.unique_dois[i:i + self.batch_size]
 
     async def process_batch(self, batch: List[str]) -> List[tuple[str, dict | None | str]]:
         batch_start = time.time()
@@ -62,7 +32,7 @@ class BatchProcessor:
 
         try:
             results = await self.entities.get(batch)
-            result_map = self._map_results(results)
+            result_map = Doi.map_results_by_doi(results)
 
             for doi in batch:
                 doi_norm = Doi.normalize_doi(doi)
@@ -80,6 +50,24 @@ class BatchProcessor:
         await self._update_progress(len(batch), batch_start)
         return updated_batch
 
+    async def retry_single_doi(self, doi: str) -> tuple[str, dict | None | str]:
+        doi_norm = Doi.normalize_doi(doi)
+        try:
+            single_result = await self.entities.get(doi)
+            if single_result:
+                return (doi_norm, single_result)
+            else:
+                return (doi_norm, "invalid input")
+        except aiohttp.ClientResponseError as e2:
+            if e2.status == 404:
+                return (doi_norm, "404 error")
+            else:
+                print(f"HTTP error {e2.status} for DOI {doi_norm}")
+                return (doi_norm, None)
+        except Exception as ex:
+            print(f"Retry failed for DOI {doi_norm}: {ex}")
+            return (doi_norm, None)
+
     async def _retry_entire_batch(self, batch: List[str]) -> List[tuple[str, dict | None | str]]:
         return [await self.retry_single_doi(doi) for doi in batch]
 
@@ -90,31 +78,25 @@ class BatchProcessor:
             avg_time_per_doi = elapsed / self.total_processed if self.total_processed else 0
             remaining_dois = self.total_dois - self.total_processed
             eta_minutes = math.ceil(remaining_dois * avg_time_per_doi / 60)
-
             print(f"Finished batch: {self.total_processed}/{self.total_dois} DOIs processed "
                   f"(Batch time: {time.time() - batch_start:.1f}s, ETA: {eta_minutes} min)")
 
     async def run(self, update_fn):
         semaphore = asyncio.Semaphore(self.max_parallel_batches)
-
         async def run_batch_with_semaphore(batch):
             async with semaphore:
                 await self._run_batch_with_retries(batch, update_fn)
-
         tasks = [
             run_batch_with_semaphore(batch)
             for batch in self.generate_batches()
         ]
-
         await asyncio.gather(*tasks)
 
     async def _run_batch_with_retries(self, batch: List[str], update_fn, max_retries: int = 3):
         success = False
         retries = 0
-
         while not success and retries < max_retries:
             batch_results = await self.process_batch(batch)
-
             if batch_results is not None:
                 await self._update_dataframe(batch_results, update_fn)
                 success = True

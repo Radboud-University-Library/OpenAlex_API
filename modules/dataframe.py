@@ -1,88 +1,93 @@
 import pandas as pd
+import asyncio
 from modules.batcher import BatchProcessor
-from modules.utils import Doi, Keys, Url
+from modules.utils import Doi, Keys, Excel
 from modules.runners import Runner
-from modules.api import ApiRequest
+from modules.api import ApiClient
 
 
 class DataFrameUpdater:
-    def __init__(self, df: pd.DataFrame, keys: list[str], request: ApiRequest):
+    def __init__(self, df: pd.DataFrame, keys: list[str], request: ApiClient):
         self.df = df
         self.keys = keys
         self.request = request
         self.doi_series = df["DOI"].astype(str).apply(Doi.normalize_doi)
-        self.url_cache = {}
+        self.url_cache: dict[str, dict | list | None] = {}
 
         for key in self.keys:
             if key not in self.df.columns:
                 self.df[key] = None
 
     async def update(self, doi: str, result: dict | None | str):
+        rows = self._match_rows(doi)
+        if rows is None:
+            return
+
+        if self._is_404(result):
+            self._fill_all_keys(rows, "URL not found")
+            return
+
+        extracted, to_fetch = self._prepare_extractions(result)
+        await self._fetch_urls_in_order(to_fetch)
+        self._resolve_pending_extractions(extracted, result, to_fetch)
+
+        coerced = {k: Excel.coerce_for_excel(v) for k, v in extracted.items()}
+        self._assign(rows, coerced)
+
+    def _match_rows(self, doi: str):
         doi_norm = Doi.normalize_doi(doi)
-        matching_rows = self.df[self.doi_series == doi_norm]
-
-        if matching_rows.empty:
+        rows = self.df.index[self.doi_series == doi_norm]
+        if len(rows) == 0:
             print(f"No match for DOI: {doi}")
-            return
-        if isinstance(result, str) and result == "404 error":
-            self._fill_all_keys(matching_rows.index, "URL not found")
-            return
+            return None
+        return rows
+
+    @staticmethod
+    def _is_404(result) -> bool:
+        return isinstance(result, str) and result == "404 error"
+
+    def _fill_all_keys(self, rows, value):
         for key in self.keys:
-            value = await self._extract_value(result, key)
-            if isinstance(value, (dict, list)):
-                value = str(value)
-            self.df.loc[matching_rows.index, key] = value
+            self.df.loc[rows, key] = value
 
-    def _fill_all_keys(self, index, value):
+    def _prepare_extractions(self, result: dict | None | str):
+
+        extracted: dict[str, object] = {}
+        to_fetch: list[tuple[str, str | None, str]] = []
+
         for key in self.keys:
-            self.df.loc[index, key] = value
+            base, proj = Keys.split_keys(key)
+            raw = Keys.get_nested_keys(result, base) if isinstance(result, dict) else result
 
-    async def _extract_value(self, data: dict, key: str):
-        """Supports bracket syntax like 'cited_by_api_url[ids.openalex]'.
-           - Left of [ ]: the base field to read from the work (may be a URL)
-           - Inside [ ]: nested field to extract from the fetched result (applied to each item)
-        """
-        if not isinstance(data, dict):
-            return data
-        base_key, nested_key = self._split_bracket_key(key)
-        raw_value = Keys.get_nested_keys(data, base_key)
-        if isinstance(raw_value, str) and raw_value.startswith("https://api.openalex.org/"):
-            if raw_value in self.url_cache:
-                fetched = self.url_cache[raw_value]
+            if isinstance(raw, str) and raw.startswith("https://api.openalex.org/"):
+                extracted[key] = None
+                to_fetch.append((raw, proj, key))
             else:
-                print(f"Key: {base_key} returns URL: {raw_value}. Fetching…")
-                fetched = await self.request.get_url(raw_value)
-                self.url_cache[raw_value] = fetched
-            if nested_key:
-                return self._extract_from_list(fetched, nested_key)
-            return fetched
-        if isinstance(raw_value, (dict, list)):
-            return raw_value
-        return raw_value
+                extracted[key] = Keys.project_keys(raw, proj)
 
-    def _split_bracket_key(self, key: str) -> tuple[str, str | None]:
-        """Split 'field[sub.field]' into ('field', 'sub.field'). If no brackets, returns (key, None)."""
-        if "[" in key and key.endswith("]"):
-            base, rest = key.split("[", 1)
-            nested = rest[:-1]  # strip trailing ']'
-            return base, nested
-        return key, None
+        return extracted, to_fetch
 
-    def _extract_from_list(self, data, nested_key: str):
-        """Extract nested_key from each item in a list response. Supports dot-paths via Keys.get_nested.
-           Special-case: if nested_key == 'ids.openalex' (or resolves to that), return compact IDs.
-        """
-        if not isinstance(data, list):
-            if isinstance(data, dict) and "results" in data:
-                data = data["results"]
-            else:
-                return None
-        out = []
-        for item in data:
-            value = Keys.get_nested_keys(item, nested_key)
-            value = Url.remove_url(value)
-            out.append(value)
-        return out
+    async def _fetch_urls_in_order(self, to_fetch):
+        unique_ordered, seen = [], set()
+        for url, _, _ in to_fetch:
+            if url not in self.url_cache and url not in seen:
+                unique_ordered.append(url); seen.add(url)
+        if not unique_ordered:
+            return
+        tasks = [asyncio.create_task(self.request.get_url(u)) for u in unique_ordered]
+        for u, t in zip(unique_ordered, asyncio.as_completed(tasks)):
+            data = await t
+            self.url_cache[u] = data
+
+    def _resolve_pending_extractions(self, extracted: dict, result: dict | None | str,
+                                     to_fetch: list[tuple[str, str | None, str]]):
+        for url, proj, key in to_fetch:
+            data = self.url_cache.get(url)
+            extracted[key] = Keys.project_keys(data, proj)
+
+    def _assign(self, rows, values: dict):
+        for key, val in values.items():
+            self.df.loc[rows, key] = val
 
 
 class DataFrameEnricher:
@@ -101,6 +106,6 @@ class DataFrameEnricher:
             entities_instance=self.entities,
             batch_size=batch_size,
             max_parallel_batches=max_parallel_batches
-            )
+        )
 
         await Runner.run_batches(batcher, self.updater.update)

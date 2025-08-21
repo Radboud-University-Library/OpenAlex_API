@@ -9,7 +9,7 @@ example_doi = "10.1111/ADB.12766"
 
 
 def main():
-    df = pd.read_excel("UKBsis Publication Details.xlsx")
+    df = pd.read_excel("UKBsis Publication Details subset.xlsx")
 
     keys = ["fwci",
             "cited_by_count",
@@ -21,7 +21,12 @@ def main():
             "citation_normalized_percentile.is_in_top_10_percent",
             "cited_by_percentile_year",
             "cited_by_percentile_year.min",
-            "cited_by_percentile_year.max",]
+            "cited_by_percentile_year.max",
+            "topics[display_name]",
+            "topics[subfield.display_name]",
+            "topics[domain.display_name]",
+            "keywords[display_name]",
+            "concepts",]
 
     df = Works.enrich(df, keys)
     df.to_excel("UKBsis_Publication_Details_Updated.xlsx", index=False)

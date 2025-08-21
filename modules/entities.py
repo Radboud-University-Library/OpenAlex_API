@@ -1,6 +1,6 @@
 import asyncio
 import pandas as pd
-from modules.api import ApiRequest, Session
+from modules.api import ApiClient, Session
 from modules.utils import Doi, Filter
 from modules.dataframe import DataFrameEnricher
 
@@ -8,7 +8,7 @@ from modules.dataframe import DataFrameEnricher
 class Entities:
     def __init__(self, entity_type: str, request=None):
         self.entity_type = entity_type
-        self.request = request or ApiRequest()
+        self.request = request or ApiClient()
         self.filter_instance = Filter()
 
     async def get(self, input):
@@ -51,7 +51,7 @@ class Works:
     def get(input):
         async def _run():
             async with Session() as aio_session:
-                request = ApiRequest(session=aio_session)
+                request = ApiClient(session=aio_session)
                 entities = Entities("works", request=request)
                 return await entities.get(input)
         return asyncio.run(_run())
@@ -72,7 +72,7 @@ class Works:
     @staticmethod
     async def _enrich_async(df: pd.DataFrame, keys: list[str], column_name: str):
         async with Session() as aio_session:
-            request = ApiRequest(session=aio_session)
+            request = ApiClient(session=aio_session)
             entities = Entities("works", request=request)
             enricher = DataFrameEnricher(df, keys, entities_instance=entities)
             await enricher.enrich(column_name=column_name)
@@ -93,7 +93,7 @@ class Works:
 
         async def _get_keys():
             async with Session() as aio_session:
-                request = ApiRequest(session=aio_session)
+                request = ApiClient(session=aio_session)
                 work = await request.get_data(f"works/{sample_id}")
                 return extract_keys(work) if work else []
 
@@ -103,6 +103,6 @@ class Works:
 if __name__ == "__main__":
     work = Works.get("W2125284466")
     works = Works.get([("institutions.id", "i145872427"),("from_publication_date", "2025-08-01")])
-    print(works)
-    print(work.keys())
+    #print(works)
+    print("\n".join(work.keys()))
     #print(json.dumps(work["cited_by_percentile_year"], indent=2))

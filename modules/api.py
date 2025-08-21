@@ -1,14 +1,15 @@
-import aiohttp
+import aiohttp, socket, brotli
 import asyncio
 import time
 from email.utils import parsedate_to_datetime
 from datetime import datetime
 from dotenv import load_dotenv
 import os
+import orjson
 
 load_dotenv()
 
-class ApiRequest:
+class ApiClient:
     BASE_URL = "https://api.openalex.org/"
     PER_PAGE = "100"
     SEMAPHORE = 3
@@ -28,6 +29,7 @@ class ApiRequest:
 
     async def get_data(self, endpoint):
         full_url = self.full_url(endpoint)
+        print(full_url)
         async with self.semaphore:
             await self._respect_rate_limit()
             for attempt in range(3):
@@ -50,7 +52,7 @@ class ApiRequest:
                 await self._handle_rate_limit(response, attempt, full_url)
                 raise Exception("Retry after rate limit")
             response.raise_for_status()
-            return await response.json()
+            return await response.json(loads=orjson.loads)
 
     async def _handle_rate_limit(self, response, attempt, full_url):
         retry_after = response.headers.get("Retry-After", "1")
@@ -115,8 +117,18 @@ class Session:
         self.email = email or os.getenv("OPENALEX_EMAIL")
 
     async def __aenter__(self):
+        connector = aiohttp.TCPConnector(
+            limit=0,
+            ttl_dns_cache=300,
+            family=socket.AF_INET,
+            enable_cleanup_closed=True,
+        )
         self.session = aiohttp.ClientSession(
-            headers={"User-Agent": f"mailto:{self.email}"},
+            connector=connector,
+            headers={
+                "User-Agent": f"mailto:{self.email}",
+                "Accept-Encoding": "gzip, deflate, br",
+            },
         )
         return self.session
 
@@ -127,7 +139,7 @@ class Session:
 if __name__ == "__main__":
     async def main():
         async with Session() as aio_session:
-            api = ApiRequest(session=aio_session)
+            api = ApiClient(session=aio_session)
             #data = await api.get_data("works/W2125284466")
             data = await api.get_results_data("works?filter=cites:W2058595066")
             print(data)
