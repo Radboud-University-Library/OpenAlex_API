@@ -10,7 +10,7 @@ import asyncio
 
 
 class BatchProcessor:
-    def __init__(self, df: pd.DataFrame, column_name: str, entities_instance: "Entities", batch_size: int = None, max_parallel_batches: int = 5):
+    def __init__(self, df: pd.DataFrame, column_name: str, entities_instance: "Entities", batch_size: int = None, max_parallel_batches: int = 5, keys = None):
         self.df = df
         self.column_name = column_name
         self.entities = entities_instance
@@ -21,6 +21,7 @@ class BatchProcessor:
         self.total_dois = len(self.unique_dois)
         self.start_time = time.time()
         self._progress_lock = asyncio.Lock()
+        self.keys = keys or None
 
     def generate_batches(self) -> Generator[List[str], None, None]:
         for i in range(0, len(self.unique_dois), self.batch_size):
@@ -31,7 +32,7 @@ class BatchProcessor:
         updated_batch = []
 
         try:
-            results = await self.entities.get(batch)
+            results = await self.entities.get(batch, self.keys)
             result_map = Doi.map_results_by_doi(results)
 
             for doi in batch:
@@ -53,7 +54,7 @@ class BatchProcessor:
     async def retry_single_doi(self, doi: str) -> tuple[str, dict | None | str]:
         doi_norm = Doi.normalize_doi(doi)
         try:
-            single_result = await self.entities.get(doi)
+            single_result = await self.entities.get(doi, self.keys)
             if single_result:
                 return (doi_norm, single_result)
             else:

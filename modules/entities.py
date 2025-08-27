@@ -1,7 +1,7 @@
 import asyncio
 import pandas as pd
 from modules.api import ApiClient, Session
-from modules.utils import Doi, Filter
+from modules.utils import Doi, Filter, Keys
 from modules.dataframe import DataFrameEnricher
 
 
@@ -11,33 +11,40 @@ class Entities:
         self.request = request or ApiClient()
         self.filter_instance = Filter()
 
-    async def get(self, input):
+    async def get(self, input, keys = None):
         if isinstance(input, str):
-            return await self._get_from_string(input)
+            return await self._get_from_string(input, keys)
         elif isinstance(input, list):
-            return await self._get_from_list(input)
+            return await self._get_from_list(input, keys)
         else:
             raise ValueError("Unsupported input type for get()")
 
-    async def _get_from_string(self, input):
-        if input.lower().startswith("10."):
-            endpoint = Doi.build_endpoint(input)
-        else:
-            endpoint = f"{self.entity_type}/{input}"
+    async def _get_from_string(self, input, keys=None):
+        endpoint = Doi.build_endpoint(input) if input.lower().startswith("10.") else f"{self.entity_type}/{input}"
+        endpoint = self._with_select_keys(endpoint, keys)
         return await self.request.get_data(endpoint)
 
-    async def _get_from_list(self, input_list):
+    async def _get_from_list(self, input_list, keys=None):
         if all(isinstance(i, tuple) for i in input_list):
             endpoint = f"{self.entity_type}{self.filter_instance.filter_attributes(input_list)}"
-            print(endpoint)
+            endpoint = self._with_select_keys(endpoint, keys)
             return await self.request.get_results_data(endpoint)
         elif all(isinstance(i, str) for i in input_list):
             endpoint = f"{self.entity_type}{Doi.batch_endpoint(input_list)}"
+            endpoint = self._with_select_keys(endpoint, keys)
             response = await self.request.get_data(endpoint)
             return response.get("results", []) if response else []
         else:
             raise ValueError("Unsupported input list type for get()")
 
+    def _with_select_keys(self, endpoint: str, keys):
+        root_keys = Keys.root_keys(keys)
+        select_keys = Entities._extract_root_keys(root_keys)
+        return self.request.get_select(endpoint, select_keys) if select_keys else endpoint
+
+    @staticmethod
+    def _extract_root_keys(keys):
+        return Keys.root_keys(keys)
 
 class Works:
     def __init__(self, request=None):
@@ -48,12 +55,12 @@ class Works:
         return getattr(self.entities, name)
 
     @staticmethod
-    def get(input):
+    def get(input, keys: list[str] = None):
         async def _run():
             async with Session() as aio_session:
                 request = ApiClient(session=aio_session)
                 entities = Entities("works", request=request)
-                return await entities.get(input)
+                return await entities.get(input, keys)
         return asyncio.run(_run())
 
     @staticmethod
@@ -65,7 +72,6 @@ class Works:
                     break
             if column_name is None:
                 raise ValueError("No DOI column found in DataFrame. Please specify column_name.")
-
         asyncio.run(Works._enrich_async(df, keys, column_name))
         return df
 
@@ -75,34 +81,14 @@ class Works:
             request = ApiClient(session=aio_session)
             entities = Entities("works", request=request)
             enricher = DataFrameEnricher(df, keys, entities_instance=entities)
-            await enricher.enrich(column_name=column_name)
+            await enricher.enrich(column_name=column_name, keys=keys)
 
-    @staticmethod
-    def keys(sample_id="W2125284466") -> list[str]:
-        """Returns all available (flattened) metadata keys from a sample work object."""
-        def extract_keys(obj, prefix=""):
-            keys = []
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    full_key = f"{prefix}.{k}" if prefix else k
-                    keys.append(full_key)
-                    keys.extend(extract_keys(v, prefix=full_key))
-            elif isinstance(obj, list) and obj:
-                keys.extend(extract_keys(obj[0], prefix=prefix + "[0]"))
-            return keys
 
-        async def _get_keys():
-            async with Session() as aio_session:
-                request = ApiClient(session=aio_session)
-                work = await request.get_data(f"works/{sample_id}")
-                return extract_keys(work) if work else []
-
-        return asyncio.run(_get_keys())
 
 
 if __name__ == "__main__":
-    work = Works.get("W2125284466")
-    works = Works.get([("institutions.id", "i145872427"),("from_publication_date", "2025-08-01")])
-    #print(works)
-    print("\n".join(work.keys()))
+    work = Works.get("W2125284466",["id"])
+    works = Works.get([("institutions.id", "i145872427"),("from_publication_date", "2025-08-01")],["id"])
+    print(works)
+    #print("\n".join(work.keys()))
     #print(json.dumps(work["cited_by_percentile_year"], indent=2))

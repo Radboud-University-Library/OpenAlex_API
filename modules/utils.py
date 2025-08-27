@@ -1,5 +1,8 @@
 import re
 from typing import List
+from collections import OrderedDict
+from modules.api import ApiClient, Session
+import asyncio
 
 
 class Doi:
@@ -88,6 +91,50 @@ class Keys:
             v = Keys.get_nested_keys(data, projection)
             return Url.remove_url(v)
         return None
+
+    @staticmethod
+    def root_keys(keys) -> list[str]:
+        if not keys:
+            return []
+        if isinstance(keys, str):
+            keys = [k.strip() for k in keys.split(",") if k.strip()]
+
+        roots: list[str] = []
+        for k in keys:
+            base, bracket_proj = Keys.split_keys(k)
+            if base:
+                roots.append(base.split(".", 1)[0])
+            if bracket_proj:
+                inner_root = bracket_proj.split(".", 1)[0]
+                if inner_root in {"ids"}:
+                    roots.append(inner_root)
+
+        seen = set()
+        return [r for r in roots if r and not (r in seen or seen.add(r))]
+
+    def _extract_keys(obj, prefix=""):
+        keys = []
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                full_key = f"{prefix}.{k}" if prefix else k
+                keys.append(full_key)
+                keys.extend(Keys._extract_keys(v, prefix=full_key))
+        elif isinstance(obj, list) and obj:
+            keys.extend(Keys._extract_keys(obj[0], prefix=prefix + "[0]"))
+        return keys
+
+    async def keys_async(sample_id: str = "W2125284466") -> List[str]:
+        async with Session() as aio_session:
+            request = ApiClient(session=aio_session)
+            work = await request.get_data(f"works/{sample_id}")
+            return Keys._extract_keys(work) if work else []
+
+    def keys(sample_id: str = "W2125284466") -> List[str]:
+        try:
+            asyncio.get_running_loop()
+            raise RuntimeError("utils.keys() called inside async context; use: await utils.keys_async(...)")
+        except RuntimeError:
+            return asyncio.run(Keys.keys_async(sample_id))
 
 class Url:
     @staticmethod

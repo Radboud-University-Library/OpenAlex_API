@@ -24,12 +24,11 @@ class ApiClient:
         self.min_interval = min_interval or self.MIN_INTERVAL
         self.session = session
 
-    def full_url(self, endpoint):
+    def _full_url(self, endpoint):
         return f"{self.base_url}{endpoint}"
 
     async def get_data(self, endpoint):
-        full_url = self.full_url(endpoint)
-        print(full_url)
+        full_url = self._full_url(endpoint)
         async with self.semaphore:
             await self._respect_rate_limit()
             for attempt in range(3):
@@ -110,6 +109,20 @@ class ApiClient:
             data = await self.get_data(url)
         return data
 
+    def get_select(self, endpoint: str, select_list) -> str:
+        if isinstance(select_list, (list, tuple)):
+            if not select_list:
+                raise ValueError("select_list cannot be empty")
+            fields = ",".join(select_list)
+        elif isinstance(select_list, str):
+            fields = select_list.strip()
+            if not fields:
+                raise ValueError("select_list cannot be empty")
+        else:
+            raise TypeError(f"Invalid input type {type(select_list)}. Expected list[str] or str.")
+
+        sep = "&" if "?" in endpoint else "?"
+        return f"{endpoint}{sep}select={fields}"
 
 class Session:
     def __init__(self, email=None):

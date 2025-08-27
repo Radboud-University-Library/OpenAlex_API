@@ -9,7 +9,7 @@ example_doi = "10.1111/ADB.12766"
 
 
 def main():
-    df = pd.read_excel("UKBsis Publication Details subset.xlsx")
+    df = pd.read_excel("UKBsis Publication Details.xlsx")
 
     keys = ["fwci",
             "cited_by_count",

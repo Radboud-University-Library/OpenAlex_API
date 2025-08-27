@@ -96,13 +96,14 @@ class DataFrameEnricher:
         self.updater = DataFrameUpdater(df, keys, request=entities_instance.request)
         self.entities = entities_instance
 
-    async def enrich(self, column_name: str, batch_size: int = None, max_parallel_batches: int = None):
+    async def enrich(self, column_name: str, keys, batch_size: int = None, max_parallel_batches: int = None):
         batch_size = batch_size or Runner.BATCH_SIZE
         max_parallel_batches = max_parallel_batches or Runner.MAX_PARALLEL_BATCHES
 
         batcher = BatchProcessor(
             df=self.df,
             column_name=column_name,
+            keys=keys,
             entities_instance=self.entities,
             batch_size=batch_size,
             max_parallel_batches=max_parallel_batches
