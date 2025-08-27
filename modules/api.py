@@ -95,7 +95,8 @@ class ApiClient:
         return all_results
 
     def _build_paged_endpoint(self, endpoint, cursor):
-        return f"{endpoint}&per_page={self.per_page}&cursor={cursor}"
+        sep = "&" if "?" in endpoint else "?"
+        return f"{endpoint}{sep}per_page={self.per_page}&cursor={cursor}"
 
     async def get_url(self, url: str):
         if not url.startswith(self.base_url):

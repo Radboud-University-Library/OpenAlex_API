@@ -42,6 +42,14 @@ class Doi:
             for r in results if "doi" in r
         }
 
+    @staticmethod
+    def column_name(df):
+        candidates = ["doi", "DOI", "Doi", "DOI nummer", "Doi nummer"]
+        for candidate in candidates:
+            if candidate in df.columns:
+                return candidate
+        raise ValueError("No DOI column found in DataFrame. Please specify column_name.")
+
 class Filter:
     @staticmethod
     def filter_attributes(filters: list[tuple[str, str]]) -> str:

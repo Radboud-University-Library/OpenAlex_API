@@ -1,5 +1,6 @@
 import asyncio
 import pandas as pd
+from typing import Any, Coroutine
 from modules.api import ApiClient, Session
 from modules.utils import Doi, Filter, Keys
 from modules.dataframe import DataFrameEnricher
@@ -64,24 +65,22 @@ class Works:
         return asyncio.run(_run())
 
     @staticmethod
-    def enrich(df: pd.DataFrame, keys: list[str], column_name: str = None):
-        if column_name is None:
-            for candidate in ["doi", "DOI", "Doi"]:
-                if candidate in df.columns:
-                    column_name = candidate
-                    break
+    def enrich(df: pd.DataFrame, keys: list[str], column_name: str | None = None) -> pd.DataFrame | Coroutine[Any, Any, pd.DataFrame]:
+        async def _run() -> pd.DataFrame:
+            nonlocal column_name
             if column_name is None:
-                raise ValueError("No DOI column found in DataFrame. Please specify column_name.")
-        asyncio.run(Works._enrich_async(df, keys, column_name))
-        return df
-
-    @staticmethod
-    async def _enrich_async(df: pd.DataFrame, keys: list[str], column_name: str):
-        async with Session() as aio_session:
-            request = ApiClient(session=aio_session)
-            entities = Entities("works", request=request)
-            enricher = DataFrameEnricher(df, keys, entities_instance=entities)
-            await enricher.enrich(column_name=column_name, keys=keys)
+                column_name = Doi.column_name(df)
+            async with Session() as aio_session:
+                request = ApiClient(session=aio_session)
+                entities = Entities("works", request=request)
+                enricher = DataFrameEnricher(df, keys, entities_instance=entities)
+                await enricher.enrich(keys=keys, column_name=column_name)
+            return df
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(_run())
+        return _run()
 
 
 
