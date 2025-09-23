@@ -1,8 +1,5 @@
 import re
 from typing import List
-from collections import OrderedDict
-from modules.api import ApiClient, Session
-import asyncio
 
 
 class Doi:
@@ -37,10 +34,14 @@ class Doi:
 
     @staticmethod
     def map_results_by_doi(results: list[dict]) -> dict[str, dict]:
-        return {
-            Doi.normalize_doi(r.get("doi", "")): r
-            for r in results if "doi" in r
-        }
+        out = {}
+        for r in results or []:
+            doi_url = r.get("doi") or (r.get("ids", {})).get("doi")
+            if not doi_url:
+                continue
+            norm = Doi.normalize_doi(doi_url.replace("https://doi.org/", ""))
+            out[norm] = r
+        return out
 
     @staticmethod
     def column_name(df):
@@ -130,19 +131,6 @@ class Keys:
         elif isinstance(obj, list) and obj:
             keys.extend(Keys._extract_keys(obj[0], prefix=prefix + "[0]"))
         return keys
-
-    async def keys_async(sample_id: str = "W2125284466") -> List[str]:
-        async with Session() as aio_session:
-            request = ApiClient(session=aio_session)
-            work = await request.get_data(f"works/{sample_id}")
-            return Keys._extract_keys(work) if work else []
-
-    def keys(sample_id: str = "W2125284466") -> List[str]:
-        try:
-            asyncio.get_running_loop()
-            raise RuntimeError("utils.keys() called inside async context; use: await utils.keys_async(...)")
-        except RuntimeError:
-            return asyncio.run(Keys.keys_async(sample_id))
 
 class Url:
     @staticmethod

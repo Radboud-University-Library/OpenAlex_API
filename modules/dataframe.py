@@ -74,7 +74,7 @@ class DataFrameUpdater:
                 unique_ordered.append(url); seen.add(url)
         if not unique_ordered:
             return
-        tasks = [asyncio.create_task(self.request.get_url(u)) for u in unique_ordered]
+        tasks = [asyncio.create_task(self.request.get_url(u, self.keys)) for u in unique_ordered]
         for u, t in zip(unique_ordered, asyncio.as_completed(tasks)):
             data = await t
             self.url_cache[u] = data

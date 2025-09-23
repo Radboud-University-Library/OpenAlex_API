@@ -22,30 +22,40 @@ class Entities:
 
     async def _get_from_string(self, input, keys=None):
         endpoint = Doi.build_endpoint(input) if input.lower().startswith("10.") else f"{self.entity_type}/{input}"
-        endpoint = self._with_select_keys(endpoint, keys)
+        if keys is not None:
+            endpoint = self._with_select_keys(endpoint, keys)
         return await self.request.get_data(endpoint)
 
     async def _get_from_list(self, input_list, keys=None):
         if all(isinstance(i, tuple) for i in input_list):
             endpoint = f"{self.entity_type}{self.filter_instance.filter_attributes(input_list)}"
-            endpoint = self._with_select_keys(endpoint, keys)
+            if keys is not None:
+                endpoint = self._with_select_keys(endpoint, keys)
             return await self.request.get_results_data(endpoint)
         elif all(isinstance(i, str) for i in input_list):
             endpoint = f"{self.entity_type}{Doi.batch_endpoint(input_list)}"
-            endpoint = self._with_select_keys(endpoint, keys)
+            if keys is not None:
+                endpoint = self._with_select_keys(endpoint, keys)
             response = await self.request.get_data(endpoint)
             return response.get("results", []) if response else []
         else:
             raise ValueError("Unsupported input list type for get()")
 
+    async def _get_from_batch(self, input_list, keys=None):
+        if all(isinstance(i, str) for i in input_list):
+            endpoint = f"{self.entity_type}{Doi.batch_endpoint(input_list)}"
+            if keys is not None:
+                endpoint = self._with_select_keys(endpoint, keys)
+            return await self.request.get_results_data(endpoint)
+        else:
+            raise ValueError("Unsupported input list type for get()")
+
     def _with_select_keys(self, endpoint: str, keys):
         root_keys = Keys.root_keys(keys)
-        select_keys = Entities._extract_root_keys(root_keys)
-        return self.request.get_select(endpoint, select_keys) if select_keys else endpoint
+        if self.entity_type == "works" and "doi" not in root_keys:
+            root_keys = ["doi", *root_keys]
+        return self.request.get_select(endpoint, root_keys) if root_keys else endpoint
 
-    @staticmethod
-    def _extract_root_keys(keys):
-        return Keys.root_keys(keys)
 
 class Works:
     def __init__(self, request=None):
@@ -86,8 +96,9 @@ class Works:
 
 
 if __name__ == "__main__":
-    work = Works.get("W2125284466",["id"])
-    works = Works.get([("institutions.id", "i145872427"),("from_publication_date", "2025-08-01")],["id"])
-    print(works)
+    work = Works.get("W2125284466",["id", "title"])
+    #work = Works.get("W2125284466")
+    #works = Works.get([("institutions.id", "i145872427"),("from_publication_date", "2025-08-01")],["id"])
+    print(work)
     #print("\n".join(work.keys()))
     #print(json.dumps(work["cited_by_percentile_year"], indent=2))

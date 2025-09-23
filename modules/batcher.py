@@ -23,6 +23,7 @@ class BatchProcessor:
         self._progress_lock = asyncio.Lock()
         self.keys = keys or None
 
+
     def generate_batches(self) -> Generator[List[str], None, None]:
         for i in range(0, len(self.unique_dois), self.batch_size):
             yield self.unique_dois[i:i + self.batch_size]
@@ -30,9 +31,8 @@ class BatchProcessor:
     async def process_batch(self, batch: List[str]) -> List[tuple[str, dict | None | str]]:
         batch_start = time.time()
         updated_batch = []
-
         try:
-            results = await self.entities.get(batch, self.keys)
+            results = await self.entities._get_from_batch(batch, self.keys)
             result_map = Doi.map_results_by_doi(results)
 
             for doi in batch:
@@ -42,7 +42,7 @@ class BatchProcessor:
                 if result is not None:
                     updated_batch.append((doi_norm, result))
                 else:
-                    updated_batch.append(await self.retry_single_doi(doi))
+                    updated_batch.append((doi_norm, "404 error"))
 
         except Exception as e:
             print(f"Batch failed: {e} — retrying DOIs individually...")
@@ -51,26 +51,40 @@ class BatchProcessor:
         await self._update_progress(len(batch), batch_start)
         return updated_batch
 
-    async def retry_single_doi(self, doi: str) -> tuple[str, dict | None | str]:
+    async def _retry_single_doi(self, doi: str) -> tuple[str, dict | None | str]:
         doi_norm = Doi.normalize_doi(doi)
         try:
             single_result = await self.entities.get(doi, self.keys)
             if single_result:
-                return (doi_norm, single_result)
+                return [(doi_norm, single_result)]
             else:
-                return (doi_norm, "invalid input")
-        except aiohttp.ClientResponseError as e2:
-            if e2.status == 404:
-                return (doi_norm, "404 error")
-            else:
-                print(f"HTTP error {e2.status} for DOI {doi_norm}")
-                return (doi_norm, None)
+                return [(doi_norm, "404 error")]
         except Exception as ex:
             print(f"Retry failed for DOI {doi_norm}: {ex}")
-            return (doi_norm, None)
+            return [(doi_norm, None)]
 
     async def _retry_entire_batch(self, batch: List[str]) -> List[tuple[str, dict | None | str]]:
-        return [await self.retry_single_doi(doi) for doi in batch]
+        if len(batch) == 1:
+            return [await self._retry_single_doi(batch[0])]
+
+        mid = len(batch) // 2
+        first_half, second_half = batch[:mid], batch[mid:]
+
+        results = []
+
+        try:
+            first_results = await self.process_batch(first_half)
+        except Exception:
+            first_results = await self._retry_entire_batch(first_half)
+
+        try:
+            second_results = await self.process_batch(second_half)
+        except Exception:
+            second_results = await self._retry_entire_batch(second_half)
+
+        results.extend(first_results)
+        results.extend(second_results)
+        return results
 
     async def _update_progress(self, batch_size: int, batch_start: float):
         async with self._progress_lock:

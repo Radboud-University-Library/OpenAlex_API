@@ -1,4 +1,4 @@
-import aiohttp, socket, brotli
+import aiohttp, socket
 import asyncio
 import time
 from email.utils import parsedate_to_datetime
@@ -6,6 +6,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import os
 import orjson
+from modules.utils import Keys
 
 load_dotenv()
 
@@ -78,10 +79,6 @@ class ApiClient:
             print(f"Connection error (attempt {attempt + 1}): {e}")
             await asyncio.sleep(1 + attempt)
 
-    async def get_meta_data(self, endpoint):
-        data = await self.get_data(endpoint)
-        return data.get("meta") if data else None
-
     async def get_results_data(self, endpoint):
         cursor = "*"
         all_results = []
@@ -98,16 +95,19 @@ class ApiClient:
         sep = "&" if "?" in endpoint else "?"
         return f"{endpoint}{sep}per_page={self.per_page}&cursor={cursor}"
 
-    async def get_url(self, url: str):
+    async def get_url(self, url: str, select_list = None):
         if not url.startswith(self.base_url):
             print(f"Invalid OpenAlex URL: {url}")
             return None
-        url = url.replace(self.base_url,"")
-        has_query = any(param in url for param in ["filter=", "search=", "cursor=", "per_page="])
+        endpoint = url.replace(self.base_url,"")
+        if select_list:
+            select_list = Keys.root_keys(select_list)
+            endpoint = self.get_select(endpoint, select_list)
+        has_query = any(param in endpoint for param in ["filter=", "search=", "cursor=", "per_page="])
         if has_query:
-            data = await self.get_results_data(url)
+            data = await self.get_results_data(endpoint)
         else:
-            data = await self.get_data(url)
+            data = await self.get_data(endpoint)
         return data
 
     def get_select(self, endpoint: str, select_list) -> str:
