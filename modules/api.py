@@ -25,8 +25,6 @@ class ApiClient:
         self.min_interval = min_interval or self.MIN_INTERVAL
         self.session = session
 
-    def _full_url(self, endpoint):
-        return f"{self.base_url}{endpoint}"
 
     async def get_data(self, endpoint):
         full_url = self._full_url(endpoint)
@@ -39,46 +37,6 @@ class ApiClient:
                     await self._handle_attempt_exception(e, attempt, full_url)
         return None
 
-    async def _respect_rate_limit(self):
-        now = time.monotonic()
-        elapsed = now - self.last_request_time
-        if elapsed < self.min_interval:
-            await asyncio.sleep(self.min_interval - elapsed)
-        self.last_request_time = time.monotonic()
-
-    async def _attempt_request(self, full_url, attempt):
-        async with self.session.get(full_url) as response:
-            if response.status == 429:
-                await self._handle_rate_limit(response, attempt, full_url)
-                raise Exception("Retry after rate limit")
-            response.raise_for_status()
-            return await response.json(loads=orjson.loads)
-
-    async def _handle_rate_limit(self, response, attempt, full_url):
-        retry_after = response.headers.get("Retry-After", "1")
-        try:
-            wait_time = int(retry_after)
-        except ValueError:
-            retry_dt = parsedate_to_datetime(retry_after)
-            now_dt = datetime.now(retry_dt.tzinfo)
-            wait_time = max((retry_dt - now_dt).total_seconds(), 1)
-        backoff = 2 ** attempt
-        wait_time += backoff
-        print(f"429 Too Many Requests at: {full_url}. Retrying after {wait_time:.2f}s...")
-        await asyncio.sleep(wait_time)
-
-    async def _handle_attempt_exception(self, e, attempt, full_url):
-        if isinstance(e, aiohttp.ClientResponseError):
-            if e.status == 404:
-                print(f"HTTP error {e.status}: {e.message}. {full_url}")
-                raise
-            else:
-                print(f"HTTP error {e.status}: {e.message}. {full_url} (attempt {attempt + 1})")
-                await asyncio.sleep(1 + attempt)
-        elif isinstance(e, aiohttp.ClientError):
-            print(f"Connection error (attempt {attempt + 1}): {e}")
-            await asyncio.sleep(1 + attempt)
-
     async def get_results_data(self, endpoint):
         cursor = "*"
         all_results = []
@@ -90,10 +48,6 @@ class ApiClient:
             all_results.extend(response.get("results", []))
             cursor = response.get("meta", {}).get("next_cursor")
         return all_results
-
-    def _build_paged_endpoint(self, endpoint, cursor):
-        sep = "&" if "?" in endpoint else "?"
-        return f"{endpoint}{sep}per_page={self.per_page}&cursor={cursor}"
 
     async def get_url(self, url: str, select_list = None):
         if not url.startswith(self.base_url):
@@ -121,9 +75,53 @@ class ApiClient:
                 raise ValueError("select_list cannot be empty")
         else:
             raise TypeError(f"Invalid input type {type(select_list)}. Expected list[str] or str.")
-
         sep = "&" if "?" in endpoint else "?"
         return f"{endpoint}{sep}select={fields}"
+
+    async def _respect_rate_limit(self):
+        now = time.monotonic()
+        elapsed = now - self.last_request_time
+        if elapsed < self.min_interval:
+            await asyncio.sleep(self.min_interval - elapsed)
+        self.last_request_time = time.monotonic()
+
+    async def _attempt_request(self, full_url, attempt):
+        async with self.session.get(full_url) as response:
+            if response.status == 429:
+                await self._handle_rate_limit(response, attempt, full_url)
+                raise Exception("Retry after rate limit")
+            response.raise_for_status()
+            return await response.json(loads=orjson.loads)
+
+    async def _handle_rate_limit(self, response, full_url):
+        retry_after = response.headers.get("Retry-After", "1")
+        try:
+            wait_time = int(retry_after)
+        except ValueError:
+            retry_dt = parsedate_to_datetime(retry_after)
+            now_dt = datetime.now(retry_dt.tzinfo)
+            wait_time = max((retry_dt - now_dt).total_seconds(), 1)
+        print(f"429 Too Many Requests at: {full_url}. Retrying after {wait_time:.2f}s...")
+        await asyncio.sleep(wait_time)
+
+    async def _handle_attempt_exception(self, e, attempt, full_url):
+        if isinstance(e, aiohttp.ClientResponseError):
+            if e.status == 404:
+                print(f"HTTP error {e.status}: {e.message}. {full_url}")
+                raise
+            else:
+                print(f"HTTP error {e.status}: {e.message}. {full_url} (attempt {attempt + 1})")
+                await asyncio.sleep(1 + attempt)
+        elif isinstance(e, aiohttp.ClientError):
+            print(f"Connection error (attempt {attempt + 1}): {e}")
+            await asyncio.sleep(1 + attempt)
+
+    def _build_paged_endpoint(self, endpoint, cursor):
+        sep = "&" if "?" in endpoint else "?"
+        return f"{endpoint}{sep}per_page={self.per_page}&cursor={cursor}"
+
+    def _full_url(self, endpoint):
+        return f"{self.base_url}{endpoint}"
 
 class Session:
     def __init__(self, email=None):

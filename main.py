@@ -10,8 +10,10 @@ example_doi = "10.1111/ADB.12766"
 
 def main():
     df = pd.read_excel("UKBsis Publication Details 100.xlsx")
+    #df = df.head(5000)
 
-    keys = ["fwci",
+    keys = [
+            "fwci",
             "cited_by_count",
             "referenced_works_count",
             "cited_by_api_url[ids.openalex]",
@@ -26,11 +28,26 @@ def main():
             "topics[subfield.display_name]",
             "topics[domain.display_name]",
             "keywords[display_name]",
-            "concepts",]
-
+            "concepts",
+            ]
     df = Works.enrich(df, keys)
     df.to_excel("UKBsis_Publication_Details_Updated.xlsx", index=False)
 
+"""
+    keys_2 = [
+            "doi",
+            "open_access.oa_status",
+            "publication_date",
+            "type",
+            "primary_location[source.display_name]"
+            "primary_location[source.host_organization_name]"
+            "primary_location[source.host_organization_names]"
+            ]
+
+    # Juiste kolom gebruiken als startpunt "cited_by_api_url[ids.openalex]". Extract list, en herhaal enrich??
+    df = Works.enrich(df, keys_2)
+    df.to_excel("UKBsis_Publication_Details_Updated.xlsx", index=False)
+"""
 
 if __name__ == "__main__":
     main()

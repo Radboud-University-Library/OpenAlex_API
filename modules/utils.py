@@ -145,3 +145,4 @@ class Excel:
         if isinstance(value, (dict, list)):
             return str(value)
         return value
+

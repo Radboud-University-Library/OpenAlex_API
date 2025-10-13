@@ -79,7 +79,7 @@ class DataFrameUpdater:
             data = await t
             self.url_cache[u] = data
 
-    def _resolve_pending_extractions(self, extracted: dict, result: dict | None | str,
+    def _resolve_pending_extractions(self, extracted: dict,
                                      to_fetch: list[tuple[str, str | None, str]]):
         for url, proj, key in to_fetch:
             data = self.url_cache.get(url)

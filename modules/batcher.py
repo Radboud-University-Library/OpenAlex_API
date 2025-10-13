@@ -1,11 +1,9 @@
-from __future__ import annotations
 from modules.utils import Doi
 from modules.runners import Runner
 import pandas as pd
 import math
 from typing import List, Generator
 import time
-import aiohttp
 import asyncio
 
 
@@ -23,6 +21,17 @@ class BatchProcessor:
         self._progress_lock = asyncio.Lock()
         self.keys = keys or None
 
+
+    async def run(self, update_fn):
+        semaphore = asyncio.Semaphore(self.max_parallel_batches)
+        async def run_batch_with_semaphore(batch):
+            async with semaphore:
+                await self._run_batch_with_retries(batch, update_fn)
+        tasks = [
+            run_batch_with_semaphore(batch)
+            for batch in self.generate_batches()
+        ]
+        await asyncio.gather(*tasks)
 
     def generate_batches(self) -> Generator[List[str], None, None]:
         for i in range(0, len(self.unique_dois), self.batch_size):
@@ -64,27 +73,7 @@ class BatchProcessor:
             return [(doi_norm, None)]
 
     async def _retry_entire_batch(self, batch: List[str]) -> List[tuple[str, dict | None | str]]:
-        if len(batch) == 1:
-            return [await self._retry_single_doi(batch[0])]
-
-        mid = len(batch) // 2
-        first_half, second_half = batch[:mid], batch[mid:]
-
-        results = []
-
-        try:
-            first_results = await self.process_batch(first_half)
-        except Exception:
-            first_results = await self._retry_entire_batch(first_half)
-
-        try:
-            second_results = await self.process_batch(second_half)
-        except Exception:
-            second_results = await self._retry_entire_batch(second_half)
-
-        results.extend(first_results)
-        results.extend(second_results)
-        return results
+        return [await self._retry_single_doi(doi) for doi in batch]
 
     async def _update_progress(self, batch_size: int, batch_start: float):
         async with self._progress_lock:
@@ -95,17 +84,6 @@ class BatchProcessor:
             eta_minutes = math.ceil(remaining_dois * avg_time_per_doi / 60)
             print(f"Finished batch: {self.total_processed}/{self.total_dois} DOIs processed "
                   f"(Batch time: {time.time() - batch_start:.1f}s, ETA: {eta_minutes} min)")
-
-    async def run(self, update_fn):
-        semaphore = asyncio.Semaphore(self.max_parallel_batches)
-        async def run_batch_with_semaphore(batch):
-            async with semaphore:
-                await self._run_batch_with_retries(batch, update_fn)
-        tasks = [
-            run_batch_with_semaphore(batch)
-            for batch in self.generate_batches()
-        ]
-        await asyncio.gather(*tasks)
 
     async def _run_batch_with_retries(self, batch: List[str], update_fn, max_retries: int = 3):
         success = False

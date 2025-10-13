@@ -76,7 +76,7 @@ class Works:
 
     @staticmethod
     def enrich(df: pd.DataFrame, keys: list[str], column_name: str | None = None) -> pd.DataFrame | Coroutine[Any, Any, pd.DataFrame]:
-        async def _run() -> pd.DataFrame:
+        async def _run():
             nonlocal column_name
             if column_name is None:
                 column_name = Doi.column_name(df)
@@ -86,17 +86,18 @@ class Works:
                 enricher = DataFrameEnricher(df, keys, entities_instance=entities)
                 await enricher.enrich(keys=keys, column_name=column_name)
             return df
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(_run())
-        return _run()
-
-
+        return asyncio.run(_run())
 
 
 if __name__ == "__main__":
-    work = Works.get("W2125284466",["id", "title"])
+    keys = [
+            "doi",
+            "open_access",
+            "publication_date",
+            "type",
+            "primary_location"
+            ]
+    work = Works.get("W2125284466",keys)
     #work = Works.get("W2125284466")
     #works = Works.get([("institutions.id", "i145872427"),("from_publication_date", "2025-08-01")],["id"])
     print(work)
