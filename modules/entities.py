@@ -50,6 +50,16 @@ class Entities:
         else:
             raise ValueError("Unsupported input list type for get()")
 
+    async def resolve_nested_urls(self, urls: list[str], keys: list[str]):
+        results = {}
+        for url in urls:
+            try:
+                results[url] = await self.request.get_url(url, keys)
+            except Exception as e:
+                print(f"Failed to fetch {url}: {e}")
+                results[url] = None
+        return results
+
     def _with_select_keys(self, endpoint: str, keys):
         root_keys = Keys.root_keys(keys)
         if self.entity_type == "works" and "doi" not in root_keys:

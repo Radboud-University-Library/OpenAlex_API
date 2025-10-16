@@ -1,5 +1,4 @@
 import pandas as pd
-import asyncio
 from modules.batcher import BatchProcessor
 from modules.utils import Doi, Keys, Excel
 from modules.runners import Runner
@@ -28,8 +27,8 @@ class DataFrameUpdater:
             return
 
         extracted, to_fetch = self._prepare_extractions(result)
-        await self._fetch_urls_in_order(to_fetch)
-        self._resolve_pending_extractions(extracted, result, to_fetch)
+        for url, proj, key in to_fetch:
+            extracted[key] = await self.request.resolve_api_url(url, proj, self.keys)
 
         coerced = {k: Excel.coerce_for_excel(v) for k, v in extracted.items()}
         self._assign(rows, coerced)
@@ -66,24 +65,6 @@ class DataFrameUpdater:
                 extracted[key] = Keys.project_keys(raw, proj)
 
         return extracted, to_fetch
-
-    async def _fetch_urls_in_order(self, to_fetch):
-        unique_ordered, seen = [], set()
-        for url, _, _ in to_fetch:
-            if url not in self.url_cache and url not in seen:
-                unique_ordered.append(url); seen.add(url)
-        if not unique_ordered:
-            return
-        tasks = [asyncio.create_task(self.request.get_url(u, self.keys)) for u in unique_ordered]
-        for u, t in zip(unique_ordered, asyncio.as_completed(tasks)):
-            data = await t
-            self.url_cache[u] = data
-
-    def _resolve_pending_extractions(self, extracted: dict,
-                                     to_fetch: list[tuple[str, str | None, str]]):
-        for url, proj, key in to_fetch:
-            data = self.url_cache.get(url)
-            extracted[key] = Keys.project_keys(data, proj)
 
     def _assign(self, rows, values: dict):
         for key, val in values.items():

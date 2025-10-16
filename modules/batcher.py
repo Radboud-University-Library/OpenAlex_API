@@ -37,6 +37,19 @@ class BatchProcessor:
         for i in range(0, len(self.unique_dois), self.batch_size):
             yield self.unique_dois[i:i + self.batch_size]
 
+    async def _run_batch_with_retries(self, batch: List[str], update_fn, max_retries: int = 3):
+        success = False
+        retries = 0
+        while not success and retries < max_retries:
+            batch_results = await self.process_batch(batch)
+            if batch_results is not None:
+                await self._update_dataframe(batch_results, update_fn)
+                success = True
+            else:
+                retries += 1
+                print(f"Retrying batch ({retries}/{max_retries})...")
+                await asyncio.sleep(2 ** retries)
+
     async def process_batch(self, batch: List[str]) -> List[tuple[str, dict | None | str]]:
         batch_start = time.time()
         updated_batch = []
@@ -84,19 +97,6 @@ class BatchProcessor:
             eta_minutes = math.ceil(remaining_dois * avg_time_per_doi / 60)
             print(f"Finished batch: {self.total_processed}/{self.total_dois} DOIs processed "
                   f"(Batch time: {time.time() - batch_start:.1f}s, ETA: {eta_minutes} min)")
-
-    async def _run_batch_with_retries(self, batch: List[str], update_fn, max_retries: int = 3):
-        success = False
-        retries = 0
-        while not success and retries < max_retries:
-            batch_results = await self.process_batch(batch)
-            if batch_results is not None:
-                await self._update_dataframe(batch_results, update_fn)
-                success = True
-            else:
-                retries += 1
-                print(f"Retrying batch ({retries}/{max_retries})...")
-                await asyncio.sleep(2 ** retries)
 
     async def _update_dataframe(self, batch_results: List[tuple[str, dict | None | str]], update_fn):
         await asyncio.gather(*(update_fn(doi, result) for doi, result in batch_results))

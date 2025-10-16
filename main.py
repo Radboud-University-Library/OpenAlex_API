@@ -9,7 +9,7 @@ example_doi = "10.1111/ADB.12766"
 
 
 def main():
-    df = pd.read_excel("UKBsis Publication Details 100.xlsx")
+    df = pd.read_excel("UKBsis Publication Details 1000.xlsx")
     #df = df.head(5000)
 
     keys = [
