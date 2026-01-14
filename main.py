@@ -1,5 +1,6 @@
 import pandas as pd
 from modules.entities import Works
+from modules.utils import List
 
 
 radboud = "i145872427"
@@ -9,14 +10,14 @@ example_doi = "10.1111/ADB.12766"
 
 
 def main():
-    df = pd.read_excel("UKBsis Publication Details 1000.xlsx")
-    #df = df.head(5000)
+    df = pd.read_excel("UKBsis Publication Details.xlsx")
+    df = df.iloc[:1000]
 
     keys = [
             "fwci",
             "cited_by_count",
             "referenced_works_count",
-            "cited_by_api_url[ids.openalex]",
+            "referenced_works",
             "citation_normalized_percentile",
             "citation_normalized_percentile.value",
             "citation_normalized_percentile.is_in_top_1_percent",
@@ -31,9 +32,9 @@ def main():
             "concepts",
             ]
     df = Works.enrich(df, keys)
-    df.to_excel("UKBsis_Publication_Details_Updated.xlsx", index=False)
+    #df.to_excel("UKBsis_Publication_Details_Updated.xlsx", index=False)
 
-"""
+
     keys_2 = [
             "doi",
             "open_access.oa_status",
@@ -44,10 +45,12 @@ def main():
             "primary_location[source.host_organization_names]"
             ]
 
-    # Juiste kolom gebruiken als startpunt "cited_by_api_url[ids.openalex]". Extract list, en herhaal enrich??
-    df = Works.enrich(df, keys_2)
-    df.to_excel("UKBsis_Publication_Details_Updated.xlsx", index=False)
-"""
+    df_referenced_works = List.flatten_list(df, "referenced_works")
+
+    with pd.ExcelWriter("UKBsis_Publication_Details_Updated.xlsx") as writer:
+        df.to_excel(writer, sheet_name="Publication Details", index=False)
+        df_referenced_works.to_excel(writer, sheet_name="Referenced Works", index=False)
 
 if __name__ == "__main__":
     main()
+

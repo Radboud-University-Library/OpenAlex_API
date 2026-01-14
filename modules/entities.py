@@ -54,7 +54,7 @@ class Entities:
         results = {}
         for url in urls:
             try:
-                results[url] = await self.request.get_url(url, keys)
+                results[url] = await self.request.resolve_api_url(url, keys)
             except Exception as e:
                 print(f"Failed to fetch {url}: {e}")
                 results[url] = None
@@ -108,8 +108,9 @@ if __name__ == "__main__":
             "primary_location"
             ]
     work = Works.get("W2125284466",keys)
+
     #work = Works.get("W2125284466")
     #works = Works.get([("institutions.id", "i145872427"),("from_publication_date", "2025-08-01")],["id"])
     print(work)
-    #print("\n".join(work.keys()))
+    print("\n".join(work.keys()))
     #print(json.dumps(work["cited_by_percentile_year"], indent=2))

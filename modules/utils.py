@@ -1,5 +1,8 @@
 import re
 from typing import List
+from collections import Counter
+import pandas as pd
+import ast
 
 
 class Doi:
@@ -138,6 +141,22 @@ class Url:
         if isinstance(value, str) and value.startswith("https://openalex.org/"):
             return value.replace("https://openalex.org/", "")
         return value
+
+class List:
+    @staticmethod
+    def flatten_list(df, column):
+        all_items = []
+        for val in df[column].dropna():
+            if isinstance(val, str):
+                try:
+                    val = ast.literal_eval(val)  # Convert string to list
+                except Exception as e:
+                    print(f"Skipping row due to error: {e}")
+                    continue
+            all_items.extend(val)
+        item_counts = Counter(all_items)
+        return pd.DataFrame(item_counts.items(), columns=["item", "count"]).sort_values(by="count", ascending=False)
+
 
 class Excel:
     @staticmethod
