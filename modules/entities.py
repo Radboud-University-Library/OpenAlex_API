@@ -33,7 +33,8 @@ class Entities:
                 endpoint = self._with_select_keys(endpoint, keys)
             return await self.request.get_results_data(endpoint)
         elif all(isinstance(i, str) for i in input_list):
-            endpoint = f"{self.entity_type}{Doi.batch_endpoint(input_list)}"
+            identifier = self._check_identifier(input_list[0])
+            endpoint = f"{self.entity_type}{Doi.batch_endpoint(input_list, identifier)}"
             if keys is not None:
                 endpoint = self._with_select_keys(endpoint, keys)
             response = await self.request.get_data(endpoint)
@@ -42,29 +43,29 @@ class Entities:
             raise ValueError("Unsupported input list type for get()")
 
     async def _get_from_batch(self, input_list, keys=None):
+        identifier = self._check_identifier(input_list[0])
         if all(isinstance(i, str) for i in input_list):
-            endpoint = f"{self.entity_type}{Doi.batch_endpoint(input_list)}"
+            endpoint = f"{self.entity_type}{Doi.batch_endpoint(input_list, identifier)}"
             if keys is not None:
                 endpoint = self._with_select_keys(endpoint, keys)
             return await self.request.get_results_data(endpoint)
         else:
             raise ValueError("Unsupported input list type for get()")
 
-    async def resolve_nested_urls(self, urls: list[str], keys: list[str]):
-        results = {}
-        for url in urls:
-            try:
-                results[url] = await self.request.resolve_api_url(url, keys)
-            except Exception as e:
-                print(f"Failed to fetch {url}: {e}")
-                results[url] = None
-        return results
-
     def _with_select_keys(self, endpoint: str, keys):
         root_keys = Keys.root_keys(keys)
         if self.entity_type == "works" and "doi" not in root_keys:
             root_keys = ["doi", *root_keys]
         return self.request.get_select(endpoint, root_keys) if root_keys else endpoint
+
+    def _check_identifier(self, item):
+        if isinstance(item, str) and item.upper().startswith("W"):
+            identifier = "openalex_id"
+        elif isinstance(item, str) and item.startswith("10."):
+            identifier = "doi"
+        else:
+            print("Unknown ID")
+        return identifier
 
 
 class Works:

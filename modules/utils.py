@@ -7,20 +7,20 @@ import ast
 
 class Doi:
     @staticmethod
-    def normalize_doi(doi):
-        if not isinstance(doi, str) or not doi.strip():
+    def normalize_id(id):
+        if not isinstance(id, str) or not id.strip():
             raise ValueError("DOI must be a non-empty string.")
-        return doi.strip().lower().rstrip('.')
+        return id.strip().lower().rstrip('.')
 
     @staticmethod
     def build_endpoint(doi):
-        doi = Doi.normalize_doi(doi)
+        doi = Doi.normalize_id(doi)
         return f"works/https://doi.org/{doi}"
 
     @staticmethod
-    def batch_endpoint(dois: List[str]) -> str:
+    def batch_endpoint(dois: List[str], identifier) -> str:
         doi_filter = "|".join([doi.strip() for doi in dois])
-        return f"?filter=doi:{doi_filter}"
+        return f"?filter={identifier}:{doi_filter}"
 
     @staticmethod
     def unique_normalized_dois(dois: list[str]) -> list[str]:
@@ -29,7 +29,7 @@ class Doi:
         for d in dois:
             if not isinstance(d, str) or not d.strip():
                 continue
-            norm = Doi.normalize_doi(d)
+            norm = Doi.normalize_id(d)
             if norm not in seen:
                 seen.add(norm)
                 out.append(norm)
@@ -42,7 +42,7 @@ class Doi:
             doi_url = r.get("doi") or (r.get("ids", {})).get("doi")
             if not doi_url:
                 continue
-            norm = Doi.normalize_doi(doi_url.replace("https://doi.org/", ""))
+            norm = Doi.normalize_id(doi_url.replace("https://doi.org/", ""))
             out[norm] = r
         return out
 
@@ -149,13 +149,14 @@ class List:
         for val in df[column].dropna():
             if isinstance(val, str):
                 try:
-                    val = ast.literal_eval(val)  # Convert string to list
+                    val = ast.literal_eval(val)
                 except Exception as e:
                     print(f"Skipping row due to error: {e}")
                     continue
             all_items.extend(val)
+        all_items = [item.replace("https://openalex.org/", "") for item in all_items]
         item_counts = Counter(all_items)
-        return pd.DataFrame(item_counts.items(), columns=["item", "count"]).sort_values(by="count", ascending=False)
+        return pd.DataFrame(item_counts.items(), columns=["id", "count"]).sort_values(by="count", ascending=False)
 
 
 class Excel:

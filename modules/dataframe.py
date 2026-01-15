@@ -6,11 +6,12 @@ from modules.api import ApiClient
 
 
 class DataFrameUpdater:
-    def __init__(self, df: pd.DataFrame, keys: list[str], request: ApiClient):
+    def __init__(self, df: pd.DataFrame, keys: list[str], request: ApiClient, column_name: str = None):
         self.df = df
         self.keys = keys
         self.request = request
-        self.doi_series = df["DOI"].astype(str).apply(Doi.normalize_doi)
+        self.column_name = column_name
+        self.doi_series = df[column_name].astype(str).apply(Doi.normalize_id)
         self.url_cache: dict[str, dict | list | None] = {}
 
         for key in self.keys:
@@ -34,7 +35,7 @@ class DataFrameUpdater:
         self._assign(rows, coerced)
 
     def _match_rows(self, doi: str):
-        doi_norm = Doi.normalize_doi(doi)
+        doi_norm = Doi.normalize_id(doi)
         rows = self.df.index[self.doi_series == doi_norm]
         if len(rows) == 0:
             print(f"No match for DOI: {doi}")
@@ -74,12 +75,20 @@ class DataFrameUpdater:
 class DataFrameEnricher:
     def __init__(self, df: pd.DataFrame, keys: list[str], entities_instance):
         self.df = df
-        self.updater = DataFrameUpdater(df, keys, request=entities_instance.request)
+        self.keys = keys
+        self.updater = None
         self.entities = entities_instance
 
     async def enrich(self, column_name: str, keys, batch_size: int = None, max_parallel_batches: int = None):
         batch_size = batch_size or Runner.BATCH_SIZE
         max_parallel_batches = max_parallel_batches or Runner.MAX_PARALLEL_BATCHES
+
+        self.updater = DataFrameUpdater(
+            self.df,
+            keys,
+            request=self.entities.request,
+            column_name=column_name
+        )
 
         batcher = BatchProcessor(
             df=self.df,

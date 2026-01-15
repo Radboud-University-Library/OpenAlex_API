@@ -34,7 +34,6 @@ def main():
     df = Works.enrich(df, keys)
     #df.to_excel("UKBsis_Publication_Details_Updated.xlsx", index=False)
 
-
     keys_2 = [
             "doi",
             "open_access.oa_status",
@@ -46,6 +45,8 @@ def main():
             ]
 
     df_referenced_works = List.flatten_list(df, "referenced_works")
+    df_referenced_works = df_referenced_works.iloc[:1000]
+    df_referenced_works = Works.enrich(df_referenced_works, keys_2, column_name="id")
 
     with pd.ExcelWriter("UKBsis_Publication_Details_Updated.xlsx") as writer:
         df.to_excel(writer, sheet_name="Publication Details", index=False)

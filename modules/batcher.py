@@ -58,7 +58,7 @@ class BatchProcessor:
             result_map = Doi.map_results_by_doi(results)
 
             for doi in batch:
-                doi_norm = Doi.normalize_doi(doi)
+                doi_norm = Doi.normalize_id(doi)
                 result = result_map.get(doi_norm)
 
                 if result is not None:
@@ -74,7 +74,7 @@ class BatchProcessor:
         return updated_batch
 
     async def _retry_single_doi(self, doi: str) -> tuple[str, dict | None | str]:
-        doi_norm = Doi.normalize_doi(doi)
+        doi_norm = Doi.normalize_id(doi)
         try:
             single_result = await self.entities.get(doi, self.keys)
             if single_result:

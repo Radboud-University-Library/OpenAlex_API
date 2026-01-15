@@ -14,7 +14,7 @@ load_dotenv()
 
 class ApiClient:
     BASE_URL = "https://api.openalex.org/"
-    PER_PAGE = "100"
+    PER_PAGE = "200"
     SEMAPHORE = 3
     LAST_REQUEST_TIME = 0
     MIN_INTERVAL = 0.5
@@ -43,6 +43,7 @@ class ApiClient:
         Fetch a single page of data from the given endpoint.
         """
         full_url = self._full_url(endpoint)
+        print(full_url)
         async with self.semaphore:
             await self._respect_rate_limit()
             for attempt in range(3):
