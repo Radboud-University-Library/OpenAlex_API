@@ -1,4 +1,6 @@
 import asyncio
+import json
+
 import pandas as pd
 from typing import Any, Coroutine
 from modules.api import ApiClient, Session
@@ -21,7 +23,11 @@ class Entities:
             raise ValueError("Unsupported input type for get()")
 
     async def _get_from_string(self, input, keys=None):
-        endpoint = Doi.build_endpoint(input) if input.lower().startswith("10.") else f"{self.entity_type}/{input}"
+        identifier = Doi.check_identifier(input)
+        if identifier == "doi":
+            endpoint = Doi.build_endpoint(input)
+        else:
+            endpoint = f"{self.entity_type}/{Doi.normalize_id(input)}"
         if keys is not None:
             endpoint = self._with_select_keys(endpoint, keys)
         return await self.request.get_data(endpoint)
@@ -33,7 +39,7 @@ class Entities:
                 endpoint = self._with_select_keys(endpoint, keys)
             return await self.request.get_results_data(endpoint)
         elif all(isinstance(i, str) for i in input_list):
-            identifier = self._check_identifier(input_list[0])
+            identifier = Doi.check_identifier(input_list[0])
             endpoint = f"{self.entity_type}{Doi.batch_endpoint(input_list, identifier)}"
             if keys is not None:
                 endpoint = self._with_select_keys(endpoint, keys)
@@ -43,29 +49,26 @@ class Entities:
             raise ValueError("Unsupported input list type for get()")
 
     async def _get_from_batch(self, input_list, keys=None):
-        identifier = self._check_identifier(input_list[0])
+        identifier = Doi.check_identifier(input_list[0])
         if all(isinstance(i, str) for i in input_list):
             endpoint = f"{self.entity_type}{Doi.batch_endpoint(input_list, identifier)}"
             if keys is not None:
                 endpoint = self._with_select_keys(endpoint, keys)
-            return await self.request.get_results_data(endpoint)
+            sep = "&" if "?" in endpoint else "?"
+            endpoint = f"{endpoint}{sep}per_page={self.request.per_page}"
+            response = await self.request.get_data(endpoint)
+            return response.get("results", []) if response else []
         else:
             raise ValueError("Unsupported input list type for get()")
 
     def _with_select_keys(self, endpoint: str, keys):
         root_keys = Keys.root_keys(keys)
-        if self.entity_type == "works" and "doi" not in root_keys:
-            root_keys = ["doi", *root_keys]
+        if self.entity_type == "works":
+            if "doi" not in root_keys:
+                root_keys = ["doi", *root_keys]
+            if "id" not in root_keys:
+                root_keys = ["id", *root_keys]
         return self.request.get_select(endpoint, root_keys) if root_keys else endpoint
-
-    def _check_identifier(self, item):
-        if isinstance(item, str) and item.upper().startswith("W"):
-            identifier = "openalex_id"
-        elif isinstance(item, str) and item.startswith("10."):
-            identifier = "doi"
-        else:
-            print("Unknown ID")
-        return identifier
 
 
 class Works:
@@ -86,7 +89,13 @@ class Works:
         return asyncio.run(_run())
 
     @staticmethod
-    def enrich(df: pd.DataFrame, keys: list[str], column_name: str | None = None) -> pd.DataFrame | Coroutine[Any, Any, pd.DataFrame]:
+    def enrich(
+        df: pd.DataFrame,
+        keys: list[str],
+        column_name: str | None = None,
+        batch_size: int | None = None,
+        max_parallel_batches: int | None = None,
+    ) -> pd.DataFrame | Coroutine[Any, Any, pd.DataFrame]:
         async def _run():
             nonlocal column_name
             if column_name is None:
@@ -95,23 +104,32 @@ class Works:
                 request = ApiClient(session=aio_session)
                 entities = Entities("works", request=request)
                 enricher = DataFrameEnricher(df, keys, entities_instance=entities)
-                await enricher.enrich(keys=keys, column_name=column_name)
+                await enricher.enrich(
+                    keys=keys,
+                    column_name=column_name,
+                    batch_size=batch_size,
+                    max_parallel_batches=max_parallel_batches,
+                )
             return df
         return asyncio.run(_run())
 
 
 if __name__ == "__main__":
-    keys = [
-            "doi",
-            "open_access",
-            "publication_date",
-            "type",
-            "primary_location"
-            ]
-    work = Works.get("W2125284466",keys)
+    #keys = [
+    #        "doi",
+    #        "open_access",
+    #        "publication_date",
+    #        "type",
+    #        "primary_location"
+    #        ]
+    #work = Works.get("W2125284466",keys)
 
-    #work = Works.get("W2125284466")
-    #works = Works.get([("institutions.id", "i145872427"),("from_publication_date", "2025-08-01")],["id"])
-    print(work)
+    work = Works.get("W2125284466")
+    #works = Works.get([("institutions.id", "i145872427"),("from_publication_date", "2026-04-01")])
+    #print(works)
     print("\n".join(work.keys()))
     #print(json.dumps(work["cited_by_percentile_year"], indent=2))
+
+    #with open("data.json", "w", encoding="utf-8") as f:
+    #    json.dump(works, f, indent=4, ensure_ascii=False)
+

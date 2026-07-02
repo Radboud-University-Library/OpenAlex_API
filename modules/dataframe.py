@@ -22,7 +22,6 @@ class DataFrameUpdater:
         rows = self._match_rows(doi)
         if rows is None:
             return
-
         if self._is_404(result):
             self._fill_all_keys(rows, "URL not found")
             return
@@ -68,8 +67,12 @@ class DataFrameUpdater:
         return extracted, to_fetch
 
     def _assign(self, rows, values: dict):
-        for key, val in values.items():
-            self.df.loc[rows, key] = val
+        if not values:
+            return
+        cols = list(values.keys())
+        row_values = [[values.get(c) for c in cols]]
+        data = pd.DataFrame(row_values, columns=cols)
+        self.df.loc[rows, cols] = data.values.repeat(len(rows), axis=0)
 
 
 class DataFrameEnricher:

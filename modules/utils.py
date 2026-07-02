@@ -10,7 +10,50 @@ class Doi:
     def normalize_id(id):
         if not isinstance(id, str) or not id.strip():
             raise ValueError("DOI must be a non-empty string.")
-        return id.strip().lower().rstrip('.')
+        raw = id.strip().rstrip(".")
+
+        openalex_id = Doi._extract_openalex_id(raw)
+        if openalex_id:
+            return openalex_id
+
+        doi = Doi._extract_doi(raw)
+        if doi:
+            return doi.lower()
+
+        return raw.lower()
+
+    @staticmethod
+    def _extract_openalex_id(value: str) -> str | None:
+        v = value.strip()
+        lower = v.lower()
+        for prefix in ("https://openalex.org/", "http://openalex.org/",
+                       "https://api.openalex.org/", "http://api.openalex.org/"):
+            if lower.startswith(prefix):
+                v = v[len(prefix):]
+                lower = v.lower()
+                break
+
+        if lower.startswith("works/"):
+            v = v.split("/", 1)[1]
+            lower = v.lower()
+
+        if re.match(r"^[Ww]\d+$", v):
+            return f"W{v[1:]}"
+        return None
+
+    @staticmethod
+    def _extract_doi(value: str) -> str | None:
+        v = value.strip()
+        lower = v.lower()
+        if lower.startswith("https://doi.org/"):
+            v = v.split("doi.org/", 1)[1]
+            lower = v.lower()
+        elif lower.startswith("http://doi.org/"):
+            v = v.split("doi.org/", 1)[1]
+            lower = v.lower()
+        if lower.startswith("10."):
+            return v
+        return None
 
     @staticmethod
     def build_endpoint(doi):
@@ -19,7 +62,8 @@ class Doi:
 
     @staticmethod
     def batch_endpoint(dois: List[str], identifier) -> str:
-        doi_filter = "|".join([doi.strip() for doi in dois])
+        normalized = [Doi.normalize_id(doi) for doi in dois]
+        doi_filter = "|".join(normalized)
         return f"?filter={identifier}:{doi_filter}"
 
     @staticmethod
@@ -37,12 +81,19 @@ class Doi:
 
     @staticmethod
     def map_results_by_doi(results: list[dict]) -> dict[str, dict]:
+        return Doi.map_results_by_id(results, identifier="doi")
+
+    @staticmethod
+    def map_results_by_id(results: list[dict], identifier: str) -> dict[str, dict]:
         out = {}
         for r in results or []:
-            doi_url = r.get("doi") or (r.get("ids", {})).get("doi")
-            if not doi_url:
+            if identifier == "openalex_id":
+                raw = r.get("id") or (r.get("ids", {})).get("openalex")
+            else:
+                raw = r.get("doi") or (r.get("ids", {})).get("doi")
+            if not raw:
                 continue
-            norm = Doi.normalize_id(doi_url.replace("https://doi.org/", ""))
+            norm = Doi.normalize_id(raw)
             out[norm] = r
         return out
 
@@ -53,6 +104,18 @@ class Doi:
             if candidate in df.columns:
                 return candidate
         raise ValueError("No DOI column found in DataFrame. Please specify column_name.")
+
+    @staticmethod
+    def check_identifier(item):
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError("Identifier must be a non-empty string.")
+
+        if Doi._extract_openalex_id(item):
+            return "openalex_id"
+        if Doi._extract_doi(item):
+            return "doi"
+
+        raise ValueError(f"Unknown identifier format: {item}")
 
 class Filter:
     @staticmethod
@@ -142,22 +205,38 @@ class Url:
             return value.replace("https://openalex.org/", "")
         return value
 
+
 class List:
     @staticmethod
-    def flatten_list(df, column):
+    def flatten_list(df, column, keep_urls: bool = False):
         all_items = []
         for val in df[column].dropna():
             if isinstance(val, str):
-                try:
-                    val = ast.literal_eval(val)
-                except Exception as e:
-                    print(f"Skipping row due to error: {e}")
+                val = val.strip()
+                if val.startswith("[") and val.endswith("]"):
+                    try:
+                        val = ast.literal_eval(val)
+                        if not isinstance(val, list):
+                            continue
+                    except Exception as e:
+                        print(f"Skipping row due to error: {e}")
+                        continue
+                else:
                     continue
-            all_items.extend(val)
-        all_items = [item.replace("https://openalex.org/", "") for item in all_items]
-        item_counts = Counter(all_items)
-        return pd.DataFrame(item_counts.items(), columns=["id", "count"]).sort_values(by="count", ascending=False)
 
+            if isinstance(val, list):
+                all_items.extend(val)
+
+        if keep_urls:
+            all_items = [item for item in all_items if isinstance(item, str)]
+        else:
+            all_items = [
+                item.replace("https://openalex.org/", "")
+                for item in all_items if isinstance(item, str)
+            ]
+        item_counts = Counter(all_items)
+        return pd.DataFrame(item_counts.items(), columns=["id", "count"])\
+                 .sort_values(by="count", ascending=False)
 
 class Excel:
     @staticmethod

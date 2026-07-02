@@ -1,6 +1,6 @@
 class Runner:
-    BATCH_SIZE = 50
-    MAX_PARALLEL_BATCHES = 5
+    BATCH_SIZE = 100
+    MAX_PARALLEL_BATCHES = 10
 
     @staticmethod
     async def run_batches(

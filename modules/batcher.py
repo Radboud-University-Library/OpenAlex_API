@@ -8,12 +8,20 @@ import asyncio
 
 
 class BatchProcessor:
-    def __init__(self, df: pd.DataFrame, column_name: str, entities_instance: "Entities", batch_size: int = None, max_parallel_batches: int = 5, keys = None):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        column_name: str,
+        entities_instance: "Entities",
+        batch_size: int = None,
+        max_parallel_batches: int = None,
+        keys=None,
+    ):
         self.df = df
         self.column_name = column_name
         self.entities = entities_instance
         self.batch_size = batch_size or Runner.BATCH_SIZE
-        self.max_parallel_batches = max_parallel_batches
+        self.max_parallel_batches = max_parallel_batches or Runner.MAX_PARALLEL_BATCHES
         self.total_processed = 0
         self.unique_dois = Doi.unique_normalized_dois(self.df[self.column_name].dropna().tolist())
         self.total_dois = len(self.unique_dois)
@@ -54,13 +62,14 @@ class BatchProcessor:
         batch_start = time.time()
         updated_batch = []
         try:
+            identifier = Doi.check_identifier(batch[0])
             results = await self.entities._get_from_batch(batch, self.keys)
-            result_map = Doi.map_results_by_doi(results)
+
+            result_map = Doi.map_results_by_id(results, identifier=identifier)
 
             for doi in batch:
                 doi_norm = Doi.normalize_id(doi)
                 result = result_map.get(doi_norm)
-
                 if result is not None:
                     updated_batch.append((doi_norm, result))
                 else:
@@ -78,12 +87,12 @@ class BatchProcessor:
         try:
             single_result = await self.entities.get(doi, self.keys)
             if single_result:
-                return [(doi_norm, single_result)]
+                return (doi_norm, single_result)
             else:
-                return [(doi_norm, "404 error")]
+                return (doi_norm, "404 error")
         except Exception as ex:
             print(f"Retry failed for DOI {doi_norm}: {ex}")
-            return [(doi_norm, None)]
+            return (doi_norm, None)
 
     async def _retry_entire_batch(self, batch: List[str]) -> List[tuple[str, dict | None | str]]:
         return [await self._retry_single_doi(doi) for doi in batch]
