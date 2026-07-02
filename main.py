@@ -1,6 +1,8 @@
+import json
+
 import pandas as pd
 from modules.entities import Works
-from modules.utils import List
+from modules.utils import Excel
 
 
 radboud = "i145872427"
@@ -10,6 +12,9 @@ example_doi = "10.1111/ADB.12766"
 
 
 def main():
+    # Choose either "excel" or "json".
+    output_format = "json"
+
     df = pd.read_excel("surf_publication_details.xlsx")
     #df = df.iloc[:5000]
 
@@ -49,12 +54,32 @@ def main():
     df = Works.enrich(df, keys)
     #df.to_excel("surf_publication_details_updated.xlsx", index=False)
 
-    df_referenced_works = List.flatten_list(df, "referenced_works", keep_urls=True)
-    #df_referenced_works = Works.enrich(df_referenced_works, keys_2, column_name="id")
+    export_results(df, output_format)
 
-    with pd.ExcelWriter("surf_publication_details_updated_.xlsx") as writer:
-        df.to_excel(writer, sheet_name="Publication Details", index=False)
-        df_referenced_works.to_excel(writer, sheet_name="Referenced Works", index=False)
+
+def export_results(df, output_format):
+    output_format = output_format.lower()
+
+    if output_format == "excel":
+        _prepare_for_excel(df).to_excel(
+            "surf_publication_details_updated_.xlsx",
+            sheet_name="Publication Details",
+            index=False,
+        )
+        return
+
+    if output_format == "json":
+        data = json.loads(df.to_json(orient="records", date_format="iso"))
+        with open("surf_publication_details_updated_.json", "w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+        return
+
+    raise ValueError('output_format must be either "excel" or "json"')
+
+
+def _prepare_for_excel(df):
+    return df.apply(lambda column: column.map(Excel.coerce_for_excel))
+
 
 if __name__ == "__main__":
     main()

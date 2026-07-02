@@ -1,6 +1,6 @@
 import pandas as pd
 from modules.batcher import BatchProcessor
-from modules.utils import Doi, Keys, Excel
+from modules.utils import Doi, Keys
 from modules.runners import Runner
 from modules.api import ApiClient
 
@@ -30,8 +30,7 @@ class DataFrameUpdater:
         for url, proj, key in to_fetch:
             extracted[key] = await self.request.resolve_api_url(url, proj, self.keys)
 
-        coerced = {k: Excel.coerce_for_excel(v) for k, v in extracted.items()}
-        self._assign(rows, coerced)
+        self._assign(rows, extracted)
 
     def _match_rows(self, doi: str):
         doi_norm = Doi.normalize_id(doi)
