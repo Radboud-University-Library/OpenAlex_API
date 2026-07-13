@@ -7,6 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import os
 import orjson
+from urllib.parse import urlencode
 from modules.utils import Keys
 
 load_dotenv()
@@ -24,7 +25,8 @@ class ApiClient:
         base_url: str = None,
         semaphore: asyncio.Semaphore = None,
         min_interval: float = None,
-        session: aiohttp.ClientSession = None
+        session: aiohttp.ClientSession = None,
+        api_key: str = None,
     ):
         """
         Initialize the API client for OpenAlex.
@@ -35,6 +37,7 @@ class ApiClient:
         self.last_request_time = self.LAST_REQUEST_TIME
         self.min_interval = min_interval or self.MIN_INTERVAL
         self.session = session
+        self.api_key = api_key or os.getenv("OPENALEX_API_KEY")
         self._global_backoff_until = 0
         self._last_logged_backoff = 0
 
@@ -169,16 +172,19 @@ class ApiClient:
         return f"{endpoint}{sep}per_page={self.per_page}&cursor={cursor}"
 
     def _full_url(self, endpoint: str) -> str:
-        return f"{self.base_url}{endpoint}"
+        full_url = f"{self.base_url}{endpoint}"
+        if not self.api_key or "api_key=" in full_url:
+            return full_url
+        separator = "&" if "?" in full_url else "?"
+        return f"{full_url}{separator}{urlencode({'api_key': self.api_key})}"
 
 
 class Session:
     """
     Context manager for aiohttp.ClientSession with OpenAlex-friendly headers.
     """
-    def __init__(self, email=None):
+    def __init__(self):
         self.session = None
-        self.email = email or os.getenv("OPENALEX_EMAIL")
 
     async def __aenter__(self):
         connector = aiohttp.TCPConnector(
@@ -190,7 +196,6 @@ class Session:
         self.session = aiohttp.ClientSession(
             connector=connector,
             headers={
-                "User-Agent": f"mailto:{self.email}",
                 "Accept-Encoding": "gzip, deflate, br",
             },
         )
@@ -198,12 +203,3 @@ class Session:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.session.close()
-
-
-if __name__ == "__main__":
-    async def main():
-        async with Session() as aio_session:
-            api = ApiClient(session=aio_session)
-            data = await api.get_results_data("works?filter=cites:W2058595066")
-            print(data)
-    asyncio.run(main())
