@@ -115,21 +115,9 @@ class Works:
 
 
 if __name__ == "__main__":
-    #keys = [
-    #        "doi",
-    #        "open_access",
-    #        "publication_date",
-    #        "type",
-    #        "primary_location"
-    #        ]
-    #work = Works.get("W2125284466",keys)
-
     work = Works.get("W2125284466")
-    #works = Works.get([("institutions.id", "i145872427"),("from_publication_date", "2026-04-01")])
-    #print(works)
     print("\n".join(work.keys()))
-    #print(json.dumps(work["cited_by_percentile_year"], indent=2))
+    works = Works.get([("institutions.id", "i145872427"),("from_publication_date", "2026-04-01")])
+    print(works)
 
-    #with open("data.json", "w", encoding="utf-8") as f:
-    #    json.dump(works, f, indent=4, ensure_ascii=False)
 

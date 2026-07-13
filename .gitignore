@@ -13,4 +13,8 @@ __pycache__/
 *_cache.json
 *_cache.json.tmp
 *_updated*.json
-
+*_enriched.json
+*_enriched.xlsx
+*_smoke.json
+openalex_works.json
+openalex_works.xlsx

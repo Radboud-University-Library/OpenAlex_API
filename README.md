@@ -1,45 +1,13 @@
-# OpenAlex API Enrichment Tools
+# OpenAlex API Tools
 
-Python tools for enriching publication spreadsheets with metadata from the
-[OpenAlex](https://openalex.org/) API.
+Python tools for working with [OpenAlex](https://openalex.org/) works metadata.
 
-The main script reads an Excel spreadsheet with DOI values or OpenAlex work IDs,
-requests selected OpenAlex fields, and writes enriched output as JSON or Excel.
-It can also make configurable follow-up requests against nested OpenAlex list
-fields. `referenced_works` is included as an example follow-up field, not as the
-only possible follow-up request.
+The project has two main functionalities:
 
-## What You Need To Choose
+- `get_works`: get OpenAlex work records directly.
+- `enrich_works`: enrich an Excel spreadsheet of publication records.
 
-Before running the script, choose these inputs in `main.py` or with command-line
-arguments:
-
-- `input file`: Excel workbook with one row per publication.
-- `id column`: column containing DOI values or OpenAlex work IDs.
-- `run mode`: `enrich` or `followup`.
-- `output format`: `json` or `excel`.
-- `output file`: where the enriched result should be written.
-- `enrichment keys`: OpenAlex fields to add to the main publication rows.
-- `follow-up field`: nested OpenAlex list field that contains IDs needing a second request.
-- `follow-up mode`: `build` or `refresh` for the follow-up cache.
-- `follow-up keys`: OpenAlex fields to fetch for every item in the follow-up field.
-
-## Modes
-
-`enrich` enriches the input publication rows directly with the fields listed in
-`DEFAULT_ENRICH_KEYS` or passed with `--keys`.
-
-`followup` first fetches IDs from a nested OpenAlex list field and then requests
-extra metadata for each item in that list. The default example is
-`referenced_works`. To follow up another list field, set `DEFAULT_FOLLOWUP_FIELD`
-or pass `--followup-field`.
-
-Follow-up cache modes:
-
-- `build`: reuse existing cache files and fetch only missing items.
-- `refresh`: rebuild the follow-up cache from the input file.
-
-## Quick Start
+## Setup
 
 Install dependencies:
 
@@ -47,33 +15,163 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Create a `.env` file from `.env.example` and set your OpenAlex contact email:
+Create a `.env` file from `.env.example` and set your OpenAlex API key:
 
 ```text
-OPENALEX_EMAIL=your.name@example.org
+OPENALEX_API_KEY=your_openalex_api_key_here
 ```
 
-Edit the `DEFAULT_*` values at the top of `main.py`, then run:
+You can edit the `DEFAULT_*` values at the top of `main.py`, or override them
+from the command line.
 
-```bash
-python main.py
+## Functionality 1: Get Works
+
+Use `get_works` when you want to request OpenAlex work records directly, without
+using a spreadsheet.
+
+Input can be:
+
+- one DOI
+- one OpenAlex work ID
+- comma-separated DOI/OpenAlex IDs
+- semicolon-separated OpenAlex filters
+
+Get one work by OpenAlex ID:
+
+```python
+DEFAULT_GET_WORKS_INPUT = "W2741809807"
+DEFAULT_GET_WORKS_KEYS = [
+    "id",
+    "doi",
+    "title",
+    "publication_date",
+    "cited_by_count",
+]
 ```
 
-You can also override settings from the command line.
+Get one work by DOI:
+
+```python
+DEFAULT_GET_WORKS_INPUT = "10.7717/peerj.4375"
+DEFAULT_GET_WORKS_KEYS = [
+    "id",
+    "doi",
+    "title",
+    "publication_date",
+]
+```
+
+Get multiple works:
+
+```python
+DEFAULT_GET_WORKS_INPUT = "W2741809807,W2125284466"
+DEFAULT_GET_WORKS_KEYS = [
+    "id",
+    "title",
+]
+```
+
+Get works by filters:
+
+Filtering input uses `field:value` pairs. Add multiple filters by separating
+them with semicolons:
+
+```text
+field_1:value_1;field_2:value_2
+```
+
+For example, get works from one institution in a date range:
+
+```python
+DEFAULT_GET_WORKS_INPUT = "institutions.id:I145872427;from_publication_date:2025-01-01;to_publication_date:2025-12-31"
+DEFAULT_GET_WORKS_KEYS = [
+    "id",
+    "title",
+    "publication_date",
+    "cited_by_count",
+]
+```
+
+Another example, get works that cite a specific DOI or OpenAlex work:
+
+```python
+DEFAULT_GET_WORKS_INPUT = "cites:10.7717/peerj.4375"
+DEFAULT_GET_WORKS_KEYS = [
+    "id",
+    "doi",
+    "title",
+    "publication_date",
+    "cited_by_count",
+]
+```
+
+If no output file is provided, `get_works` writes:
+
+- `openalex_works.json`
+- `openalex_works.xlsx`
+
+## Functionality 2: Enrich Works
+
+Use `enrich_works` when you have an Excel spreadsheet with publication records
+and want to add OpenAlex metadata.
+
+Before running spreadsheet enrichment, choose:
+
+- `input file`: Excel workbook with one row per publication.
+- `id column`: column containing DOI values or OpenAlex work IDs.
+- `mode`: `full`, `enrich`, or `followup`.
+- `output format`: `json` or `excel`.
+- `output file`: where the enriched result should be written.
+- `keys`: OpenAlex fields to add to the main publication rows.
+- `follow-up field`: nested OpenAlex list field that contains IDs needing another request.
+- `follow-up mode`: `resume_cache` or `build_cache`.
+- `follow-up keys`: OpenAlex fields to fetch for every item in the follow-up field.
+
+### Enrichment Modes
+
+`full` first enriches the input publication rows and then runs the follow-up
+workflow.
+
+`enrich` enriches the input publication rows directly with selected OpenAlex
+fields.
+
+`followup` first fetches IDs from a nested OpenAlex list field and then requests
+extra metadata for each item in that list.
+
+### Follow-Up Requests
+
+`referenced_works` is the default example follow-up field. You can replace it
+with another OpenAlex list field and choose your own follow-up keys.
+
+Follow-up cache modes:
+
+- `resume_cache`: reuse existing cache files and fetch only missing items.
+- `build_cache`: rebuild the follow-up cache from the full input file.
 
 Direct enrichment example:
 
 ```bash
-python main.py --input publication_details.xlsx --id-column DOI --mode enrich --keys title publication_date cited_by_count --format json
+python main.py --workflow enrich_works --input publication_details.xlsx --id-column DOI --mode enrich --keys title publication_date cited_by_count --format json
+```
+
+Full enrichment example:
+
+```bash
+python main.py --workflow enrich_works --input publication_details.xlsx --id-column DOI --mode full --format json
 ```
 
 Follow-up example using `referenced_works`:
 
 ```bash
-python main.py --input publication_details.xlsx --id-column DOI --mode followup --followup-field referenced_works --followup-mode build --followup-keys primary_location.source.display_name primary_location.source.issn
+python main.py --workflow enrich_works --input publication_details.xlsx --id-column DOI --mode followup --followup-field referenced_works --followup-mode resume_cache --followup-keys primary_location.source.display_name primary_location.source.issn
 ```
 
-## Input File
+If no output file is provided, `enrich_works` writes:
+
+- `publication_details_enriched.json`
+- `publication_details_enriched.xlsx`
+
+## Input File For Enrichment
 
 The input file should be an Excel workbook (`.xlsx`) with one row per
 publication. It must contain a column with DOI values or OpenAlex work IDs.
@@ -81,17 +179,12 @@ publication. It must contain a column with DOI values or OpenAlex work IDs.
 Common ID column examples:
 
 - `DOI`
-- `doi`
-- `openalex_id`
 - `OpenAlex ID`
 
 ## Output
 
-The script writes either JSON or Excel output. If no output path is provided, it
-uses a generic default name:
-
-- `publication_details_enriched.json`
-- `publication_details_enriched.xlsx`
+The script writes JSON or Excel output. Use `--format json` or `--format excel`.
+Use `--output` to choose a custom output path.
 
 ## Caches
 
