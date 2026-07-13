@@ -1,3 +1,16 @@
 venv
 .idea
+.agents/
+.codex/
 .env
+__pycache__/
+*.pyc
+*.pyo
+*.tmp
+*.xlsx
+*.xls
+*.txt
+*_cache.json
+*_cache.json.tmp
+*_updated*.json
+
