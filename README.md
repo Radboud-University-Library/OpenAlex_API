@@ -122,7 +122,7 @@ Before running spreadsheet enrichment, choose:
 - `mode`: `full`, `enrich`, or `followup`.
 - `output format`: `json` or `excel`.
 - `output file`: where enriched publication rows should be written.
-- `follow-up output file`: where follow-up occurrence rows should be written.
+- `follow-up output file`: where follow-up occurrence rows should be written as JSON.
 - `keys`: OpenAlex fields to add to the main publication rows.
 - `follow-up field`: nested OpenAlex list field that contains IDs needing another request.
 - `follow-up mode`: `resume_cache` or `build_cache`.
@@ -131,7 +131,7 @@ Before running spreadsheet enrichment, choose:
 ### Enrichment Modes
 
 `full` first enriches and saves the input publication rows. It then runs the
-follow-up workflow and saves those occurrence rows to a separate output file.
+follow-up workflow and streams those occurrence rows to a separate JSON file.
 
 `enrich` enriches the input publication rows directly with selected OpenAlex
 fields.
@@ -178,12 +178,16 @@ If no output file is provided, `enrich_works` writes:
 - `publication_details_enriched.xlsx`
 
 In `full` mode, the configured output is the publication file and the follow-up
-result adds `_followup` before the extension. For example:
+result uses `_followup.json`. For example:
 
 - `publication_details_enriched.xlsx`
-- `publication_details_enriched_followup.xlsx`
+- `publication_details_enriched_followup.json`
 
 Use `--followup-output` when you want another follow-up filename.
+
+Follow-up JSON is written as one valid JSON array using bounded chunks. The
+script does not create a multi-million-row follow-up DataFrame in memory, and a
+temporary `.json.tmp` file is replaced only after the export finishes.
 
 Excel limits each cell to 32,767 UTF-16 units. When a nested OpenAlex value is
 too long for one cell, the exporter preserves all content by adding adjacent

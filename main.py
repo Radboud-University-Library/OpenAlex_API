@@ -12,7 +12,7 @@ What you need to choose before running:
 - WORKFLOW: choose `get_works` or `enrich_works`.
 - OUTPUT_FORMAT: choose `json` or `excel`.
 - OUTPUT_FILE: choose where enriched publications should be written.
-- FOLLOWUP_OUTPUT_FILE: choose where follow-up results should be written.
+- FOLLOWUP_OUTPUT_FILE: choose where follow-up JSON results should be written.
 - GET_WORKS_INPUT: DOI, OpenAlex work ID, or OpenAlex filters for direct lookup.
 - GET_WORKS_KEYS: OpenAlex fields to return for direct lookup.
 - INPUT_FILE: Excel spreadsheet with one row per publication.
@@ -80,18 +80,18 @@ DEFAULT_GET_WORKS_KEYS = [
 ]
 
 # *** CHOOSE ENRICH_WORKS WORKFLOW SETTINGS ***
-DEFAULT_INPUT_FILE = Path("publication_details.xlsx")
+DEFAULT_INPUT_FILE = Path("surf_publication_details.xlsx")
 DEFAULT_ID_COLUMN = "DOI"
 DEFAULT_LIMIT = None
 
 # *** CHOOSE SPREADSHEET ENRICHMENT RUN TYPE ***
 # `full`, `enrich` or `followup`
-DEFAULT_RUN_MODE = "enrich"
+DEFAULT_RUN_MODE = "full"
 
 # *** CHOOSE YOUR OUTPUT ***
 DEFAULT_OUTPUT_FORMAT = "excel"
-DEFAULT_OUTPUT_FILE = None
-# Leave as None to add `_followup` before the publication output extension.
+DEFAULT_OUTPUT_FILE = "surf_publication_details_updated.xlsx"
+# Leave as None to add `_followup.json` to the publication output basename.
 DEFAULT_FOLLOWUP_OUTPUT_FILE = None
 
 # *** CHOOSE MAIN PUBLICATION ENRICHMENT FIELDS ***
@@ -231,8 +231,8 @@ def build_parser():
         type=Path,
         default=DEFAULT_FOLLOWUP_OUTPUT_FILE,
         help=(
-            "Follow-up output file. If omitted, `_followup` is added to "
-            "the publication output filename."
+            "Follow-up JSON output file. If omitted, `_followup.json` is "
+            "added to the publication output basename."
         ),
     )
 
@@ -298,6 +298,11 @@ def main(argv=None):
     followup_output_path = args.followup_output or derive_followup_output_path(
         output_path
     )
+    if (
+        args.mode in {"full", "followup"}
+        and Path(followup_output_path).suffix.lower() != ".json"
+    ):
+        raise SystemExit("--followup-output must use the .json extension")
     print(f"Loading input file: {input_path}", flush=True)
     df = load_input(input_path)
     if args.limit is not None:
@@ -325,15 +330,40 @@ def main(argv=None):
         export_results(publications, args.format, output_path)
         print(f"Wrote publication output file: {output_path}", flush=True)
 
-        followup = process_followup(
+        followup_rows = export_followup_results(
             publications,
             id_column=args.id_column,
             followup_field=args.followup_field,
             followup_mode=args.followup_mode,
             followup_keys=followup_keys,
+            output_path=followup_output_path,
         )
-        export_results(followup, args.format, followup_output_path)
-        print(f"Wrote follow-up output file: {followup_output_path}", flush=True)
+        print(
+            f"Wrote {followup_rows:,} follow-up rows to: "
+            f"{followup_output_path}",
+            flush=True,
+        )
+        return 0
+
+    if args.mode == "followup":
+        print(
+            f"Starting followup mode for {len(df):,} rows using "
+            f"{args.followup_field}.",
+            flush=True,
+        )
+        followup_rows = export_followup_results(
+            df,
+            id_column=args.id_column,
+            followup_field=args.followup_field,
+            followup_mode=args.followup_mode,
+            followup_keys=followup_keys,
+            output_path=followup_output_path,
+        )
+        print(
+            f"Wrote {followup_rows:,} follow-up rows to: "
+            f"{followup_output_path}",
+            flush=True,
+        )
         return 0
 
     result = process_data(
@@ -346,11 +376,8 @@ def main(argv=None):
         followup_keys=followup_keys,
     )
 
-    result_output_path = (
-        followup_output_path if args.mode == "followup" else output_path
-    )
-    export_results(result, args.format, result_output_path)
-    print(f"Wrote output file: {result_output_path}", flush=True)
+    export_results(result, args.format, output_path)
+    print(f"Wrote output file: {output_path}", flush=True)
     return 0
 
 
@@ -393,9 +420,9 @@ def print_run_summary(
     print(f"  output format:    {output_format}")
     if mode == "full":
         print(f"  publication output: {output_path}")
-        print(f"  follow-up output:   {followup_output_path}")
+        print(f"  follow-up JSON:     {followup_output_path}")
     elif mode == "followup":
-        print(f"  output file:      {followup_output_path}")
+        print(f"  output JSON:        {followup_output_path}")
     else:
         print(f"  output file:      {output_path}")
     print(f"  enrichment keys:  {', '.join(keys)}")
@@ -562,6 +589,34 @@ def process_followup(
     )
 
 
+def export_followup_results(
+    df,
+    id_column,
+    followup_field,
+    followup_mode,
+    followup_keys,
+    output_path,
+):
+    from modules.follow_up import (
+        add_followup_items,
+        export_followup_occurrences_json,
+    )
+
+    df = add_followup_items(
+        df,
+        source_field=followup_field,
+        column_name=id_column,
+        refresh=followup_mode == "build_cache",
+    )
+    return export_followup_occurrences_json(
+        df,
+        source_field=followup_field,
+        keys=followup_keys or DEFAULT_FOLLOWUP_KEYS,
+        output_path=output_path,
+        citing_column=id_column,
+    )
+
+
 def normalize_key_list(raw_keys):
     if not raw_keys:
         return []
@@ -578,8 +633,7 @@ def default_output_path(workflow: str, output_format: str) -> Path:
 def derive_followup_output_path(publication_output_path) -> Path:
     publication_output_path = Path(publication_output_path)
     return publication_output_path.with_name(
-        f"{publication_output_path.stem}_followup"
-        f"{publication_output_path.suffix}"
+        f"{publication_output_path.stem}_followup.json"
     )
 
 

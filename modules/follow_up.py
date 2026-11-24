@@ -169,6 +169,224 @@ def enrich_followup_occurrences(
     )
 
 
+def export_followup_occurrences_json(
+    df: pd.DataFrame,
+    source_field: str,
+    keys: list[str],
+    output_path: str | Path,
+    citing_column: str | None = None,
+    metadata_cache_path: str | Path | None = None,
+    checkpoint_size: int = 5000,
+    export_chunk_size: int = 10000,
+    batch_size: int | None = None,
+    max_parallel_batches: int | None = None,
+) -> int:
+    """Stream follow-up occurrences to one JSON array without a large DataFrame."""
+    if not source_field:
+        raise ValueError("source_field must be provided")
+    if source_field not in df.columns:
+        raise ValueError(f"The DataFrame does not contain a {source_field} column")
+    if not keys:
+        raise ValueError("At least one follow-up key must be provided")
+    if checkpoint_size <= 0 or export_chunk_size <= 0:
+        raise ValueError("checkpoint and export chunk sizes must be greater than zero")
+
+    citing_column = citing_column or Doi.column_name(df)
+    metadata_cache_path = Path(
+        metadata_cache_path
+        or f"{_safe_filename(source_field)}_followup_metadata_cache.json"
+    )
+    metadata_cache = _load_metadata_cache(metadata_cache_path)
+    metadata = metadata_cache[FOLLOWUP_METADATA_CACHE_KEY]
+
+    _fetch_missing_metadata_in_chunks(
+        df=df,
+        source_field=source_field,
+        keys=keys,
+        metadata=metadata,
+        metadata_cache=metadata_cache,
+        metadata_cache_path=metadata_cache_path,
+        checkpoint_size=checkpoint_size,
+        batch_size=batch_size,
+        max_parallel_batches=max_parallel_batches,
+    )
+    return _write_occurrences_json_in_chunks(
+        df=df,
+        source_field=source_field,
+        keys=keys,
+        citing_column=citing_column,
+        metadata=metadata,
+        output_path=Path(output_path),
+        export_chunk_size=export_chunk_size,
+    )
+
+
+def _fetch_missing_metadata_in_chunks(
+    df,
+    source_field,
+    keys,
+    metadata,
+    metadata_cache,
+    metadata_cache_path,
+    checkpoint_size,
+    batch_size,
+    max_parallel_batches,
+):
+    print("Checking follow-up metadata cache.", flush=True)
+    seen = set()
+    pending = []
+    unique_count = 0
+    missing_count = 0
+    fetched_count = 0
+
+    for followup_item_id in _iter_followup_item_ids(df[source_field]):
+        if followup_item_id in seen:
+            continue
+        seen.add(followup_item_id)
+        unique_count += 1
+        if not _metadata_missing_keys(metadata.get(followup_item_id), keys):
+            continue
+
+        pending.append(followup_item_id)
+        missing_count += 1
+        if len(pending) < checkpoint_size:
+            continue
+
+        _fetch_metadata_checkpoint(
+            pending,
+            keys,
+            metadata,
+            metadata_cache,
+            metadata_cache_path,
+            batch_size,
+            max_parallel_batches,
+        )
+        fetched_count += len(pending)
+        print(
+            f"Cached metadata for {fetched_count:,} missing follow-up items.",
+            flush=True,
+        )
+        pending = []
+
+    if pending:
+        _fetch_metadata_checkpoint(
+            pending,
+            keys,
+            metadata,
+            metadata_cache,
+            metadata_cache_path,
+            batch_size,
+            max_parallel_batches,
+        )
+        fetched_count += len(pending)
+        print(
+            f"Cached metadata for {fetched_count:,} missing follow-up items.",
+            flush=True,
+        )
+
+    if missing_count:
+        print(
+            f"Metadata cache now covers {unique_count:,} unique follow-up items.",
+            flush=True,
+        )
+    else:
+        print(
+            f"Reusing metadata for all {unique_count:,} unique follow-up items.",
+            flush=True,
+        )
+
+
+def _fetch_metadata_checkpoint(
+    identifiers,
+    keys,
+    metadata,
+    metadata_cache,
+    metadata_cache_path,
+    batch_size,
+    max_parallel_batches,
+):
+    pending = pd.DataFrame({"followup_item_id": identifiers})
+    enriched = Works.enrich(
+        pending,
+        keys,
+        column_name="followup_item_id",
+        batch_size=batch_size,
+        max_parallel_batches=max_parallel_batches,
+    )
+    _update_metadata_cache(metadata, enriched, keys)
+    _save_cache(metadata_cache_path, metadata_cache)
+
+
+def _write_occurrences_json_in_chunks(
+    df,
+    source_field,
+    keys,
+    citing_column,
+    metadata,
+    output_path,
+    export_chunk_size,
+):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    row_count = 0
+    first_chunk = True
+    serialized_rows = []
+
+    print(f"Streaming follow-up rows to {output_path}.", flush=True)
+    with temporary_path.open("w", encoding="utf-8", newline="\n") as output:
+        output.write("[\n")
+        for citing_work, followup_items in zip(df[citing_column], df[source_field]):
+            for followup_item_id in _normalized_followup_item_ids(followup_items):
+                cached = metadata.get(followup_item_id, {})
+                row = {
+                    "citing_work_id": citing_work,
+                    "followup_source_field": source_field,
+                    "followup_item_id": followup_item_id,
+                }
+                for key in keys:
+                    row[key] = cached.get(key) if isinstance(cached, dict) else None
+                serialized_rows.append(
+                    json.dumps(row, ensure_ascii=False, separators=(",", ":"))
+                )
+                row_count += 1
+
+                if len(serialized_rows) >= export_chunk_size:
+                    first_chunk = _write_json_chunk(
+                        output,
+                        serialized_rows,
+                        first_chunk,
+                    )
+                    serialized_rows = []
+                    if row_count % 100000 == 0:
+                        print(f"Exported {row_count:,} follow-up rows.", flush=True)
+
+        if serialized_rows:
+            _write_json_chunk(output, serialized_rows, first_chunk)
+        output.write("\n]\n")
+
+    temporary_path.replace(output_path)
+    return row_count
+
+
+def _write_json_chunk(output, serialized_rows, first_chunk):
+    if not first_chunk:
+        output.write(",\n")
+    output.write(",\n".join(serialized_rows))
+    return False
+
+
+def _iter_followup_item_ids(values):
+    for followup_items in values:
+        yield from _normalized_followup_item_ids(followup_items)
+
+
+def _normalized_followup_item_ids(followup_items):
+    for followup_item in _as_item_list(followup_items):
+        followup_item_id = _normalize_or_none(followup_item)
+        if followup_item_id:
+            yield followup_item_id
+
+
 def _as_item_list(value):
     if isinstance(value, list):
         return [item for item in value if isinstance(item, str)]
