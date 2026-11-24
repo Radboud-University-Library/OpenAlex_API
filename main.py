@@ -11,7 +11,8 @@ This script works with OpenAlex works metadata.
 What you need to choose before running:
 - WORKFLOW: choose `get_works` or `enrich_works`.
 - OUTPUT_FORMAT: choose `json` or `excel`.
-- OUTPUT_FILE: choose where the result should be written.
+- OUTPUT_FILE: choose where enriched publications should be written.
+- FOLLOWUP_OUTPUT_FILE: choose where follow-up results should be written.
 - GET_WORKS_INPUT: DOI, OpenAlex work ID, or OpenAlex filters for direct lookup.
 - GET_WORKS_KEYS: OpenAlex fields to return for direct lookup.
 - INPUT_FILE: Excel spreadsheet with one row per publication.
@@ -51,14 +52,31 @@ Run `python main.py --help` to see all command-line options.
 DEFAULT_WORKFLOW = "enrich_works"
 
 # *** CHOOSE GET_WORKS WORKFLOW SETTINGS ***
-#DEFAULT_GET_WORKS_INPUT = "10.7717/peerj.4375"
-DEFAULT_GET_WORKS_INPUT = "institutions.id:I145872427;from_publication_date:2026-07-01;to_publication_date:2026-07-14"
+DEFAULT_GET_WORKS_INPUT = "W2741809807"
 DEFAULT_GET_WORKS_KEYS = [
     "id",
     "doi",
     "title",
     "publication_date",
+    "authorships",
+    "countries_distinct_count",
+    "institutions_distinct_count",
+    "corresponding_author_ids",
+    "corresponding_institution_ids",
+    "apc_list",
+    "apc_paid",
+    "fwci",
     "cited_by_count",
+    "citation_normalized_percentile",
+    "cited_by_percentile_year",
+    "primary_topic",
+    "topics",
+    "sustainable_development_goals",
+    "awards",
+    "funders",
+    "referenced_works_count",
+    "referenced_works",
+    "counts_by_year",
 ]
 
 # *** CHOOSE ENRICH_WORKS WORKFLOW SETTINGS ***
@@ -67,15 +85,19 @@ DEFAULT_ID_COLUMN = "DOI"
 DEFAULT_LIMIT = None
 
 # *** CHOOSE SPREADSHEET ENRICHMENT RUN TYPE ***
-DEFAULT_RUN_MODE = "full"
+# `full`, `enrich` or `followup`
+DEFAULT_RUN_MODE = "enrich"
 
 # *** CHOOSE YOUR OUTPUT ***
-DEFAULT_OUTPUT_FORMAT = "json"
+DEFAULT_OUTPUT_FORMAT = "excel"
 DEFAULT_OUTPUT_FILE = None
+# Leave as None to add `_followup` before the publication output extension.
+DEFAULT_FOLLOWUP_OUTPUT_FILE = None
 
 # *** CHOOSE MAIN PUBLICATION ENRICHMENT FIELDS ***
 DEFAULT_ENRICH_KEYS = [
     "id",
+    "doi",
     "title",
     "publication_date",
     "authorships",
@@ -104,8 +126,13 @@ DEFAULT_ENRICH_KEYS = [
 DEFAULT_FOLLOWUP_FIELD = "referenced_works"
 DEFAULT_FOLLOWUP_MODE = "resume_cache"
 DEFAULT_FOLLOWUP_KEYS = [
+    "primary_location.source.id",
     "primary_location.source.display_name",
+    "primary_location.source.type",
+    "primary_location.source.issn_l",
     "primary_location.source.issn",
+    "primary_location.source.host_organization",
+    "primary_location.source.host_organization_name",
 ]
 
 
@@ -113,6 +140,7 @@ WORKFLOWS = ("get_works", "enrich_works")
 RUN_MODES = ("full", "enrich", "followup")
 FOLLOWUP_MODES = ("build_cache", "resume_cache")
 OUTPUT_FORMATS = ("json", "excel")
+OUTPUT_EXTENSIONS = {"json": ".json", "excel": ".xlsx"}
 DEFAULT_OUTPUT_BASENAMES = {
     "get_works": "openalex_works",
     "enrich_works": "publication_details_enriched",
@@ -198,6 +226,15 @@ def build_parser():
         default=DEFAULT_OUTPUT_FILE,
         help="Output file. If omitted, a default generic name is used.",
     )
+    output_group.add_argument(
+        "--followup-output",
+        type=Path,
+        default=DEFAULT_FOLLOWUP_OUTPUT_FILE,
+        help=(
+            "Follow-up output file. If omitted, `_followup` is added to "
+            "the publication output filename."
+        ),
+    )
 
     enrich_group = parser.add_argument_group("Publication Enrichment Keys")
     enrich_group.add_argument(
@@ -258,6 +295,9 @@ def main(argv=None):
     keys = keys or DEFAULT_ENRICH_KEYS
     input_path = args.input
     output_path = args.output or default_output_path(args.workflow, args.format)
+    followup_output_path = args.followup_output or derive_followup_output_path(
+        output_path
+    )
     print(f"Loading input file: {input_path}", flush=True)
     df = load_input(input_path)
     if args.limit is not None:
@@ -272,11 +312,29 @@ def main(argv=None):
         mode=args.mode,
         output_format=args.format,
         output_path=output_path,
+        followup_output_path=followup_output_path,
         keys=keys,
         followup_field=args.followup_field,
         followup_mode=args.followup_mode,
         followup_keys=followup_keys,
     )
+
+    if args.mode == "full":
+        print(f"Starting full mode for {len(df):,} rows.", flush=True)
+        publications = enrich_publications(df, keys, args.id_column)
+        export_results(publications, args.format, output_path)
+        print(f"Wrote publication output file: {output_path}", flush=True)
+
+        followup = process_followup(
+            publications,
+            id_column=args.id_column,
+            followup_field=args.followup_field,
+            followup_mode=args.followup_mode,
+            followup_keys=followup_keys,
+        )
+        export_results(followup, args.format, followup_output_path)
+        print(f"Wrote follow-up output file: {followup_output_path}", flush=True)
+        return 0
 
     result = process_data(
         df=df,
@@ -288,8 +346,11 @@ def main(argv=None):
         followup_keys=followup_keys,
     )
 
-    export_results(result, args.format, output_path)
-    print(f"Wrote output file: {output_path}", flush=True)
+    result_output_path = (
+        followup_output_path if args.mode == "followup" else output_path
+    )
+    export_results(result, args.format, result_output_path)
+    print(f"Wrote output file: {result_output_path}", flush=True)
     return 0
 
 
@@ -319,6 +380,7 @@ def print_run_summary(
     mode,
     output_format,
     output_path,
+    followup_output_path,
     keys,
     followup_field,
     followup_mode,
@@ -329,7 +391,13 @@ def print_run_summary(
     print(f"  id column:        {id_column}")
     print(f"  mode:             {mode}")
     print(f"  output format:    {output_format}")
-    print(f"  output file:      {output_path}")
+    if mode == "full":
+        print(f"  publication output: {output_path}")
+        print(f"  follow-up output:   {followup_output_path}")
+    elif mode == "followup":
+        print(f"  output file:      {followup_output_path}")
+    else:
+        print(f"  output file:      {output_path}")
     print(f"  enrichment keys:  {', '.join(keys)}")
     if mode in {"full", "followup"}:
         print(f"  follow-up field:  {followup_field}")
@@ -434,51 +502,64 @@ def process_data(
     followup_keys=None,
 ):
     if mode == "full":
-        from modules.entities import Works
-        from modules.follow_up import add_followup_items, enrich_followup_occurrences
-
         print(f"Starting full mode for {len(df):,} rows.", flush=True)
-        df = Works.enrich(df, keys, column_name=id_column)
-        df = add_followup_items(
-            df,
-            source_field=followup_field,
-            column_name=id_column,
-            refresh=followup_mode == "build_cache",
+        publications = enrich_publications(df, keys, id_column)
+        followup = process_followup(
+            publications,
+            id_column=id_column,
+            followup_field=followup_field,
+            followup_mode=followup_mode,
+            followup_keys=followup_keys,
         )
-        return enrich_followup_occurrences(
-            df,
-            source_field=followup_field,
-            keys=followup_keys or DEFAULT_FOLLOWUP_KEYS,
-            citing_column=id_column,
-        )
+        return publications, followup
 
     if mode == "enrich":
-        from modules.entities import Works
-
         print(f"Starting enrich mode for {len(df):,} rows.", flush=True)
-        return Works.enrich(df, keys, column_name=id_column)
+        return enrich_publications(df, keys, id_column)
 
     if mode == "followup":
-        from modules.follow_up import add_followup_items, enrich_followup_occurrences
-
         print(
             f"Starting followup mode for {len(df):,} rows using {followup_field}.",
             flush=True,
         )
-        df = add_followup_items(
+        return process_followup(
             df,
-            source_field=followup_field,
-            column_name=id_column,
-            refresh=followup_mode == "build_cache",
-        )
-        return enrich_followup_occurrences(
-            df,
-            source_field=followup_field,
-            keys=followup_keys or DEFAULT_FOLLOWUP_KEYS,
-            citing_column=id_column,
+            id_column=id_column,
+            followup_field=followup_field,
+            followup_mode=followup_mode,
+            followup_keys=followup_keys,
         )
 
     raise ValueError('mode must be "full", "enrich", or "followup"')
+
+
+def enrich_publications(df, keys, id_column):
+    from modules.entities import Works
+
+    return Works.enrich(df, keys, column_name=id_column)
+
+
+def process_followup(
+    df,
+    id_column,
+    followup_field,
+    followup_mode,
+    followup_keys,
+):
+    from modules.follow_up import add_followup_items, enrich_followup_occurrences
+
+    df = add_followup_items(
+        df,
+        source_field=followup_field,
+        column_name=id_column,
+        refresh=followup_mode == "build_cache",
+    )
+    return enrich_followup_occurrences(
+        df,
+        source_field=followup_field,
+        keys=followup_keys or DEFAULT_FOLLOWUP_KEYS,
+        citing_column=id_column,
+    )
 
 
 def normalize_key_list(raw_keys):
@@ -491,7 +572,15 @@ def normalize_key_list(raw_keys):
 
 def default_output_path(workflow: str, output_format: str) -> Path:
     basename = DEFAULT_OUTPUT_BASENAMES[workflow]
-    return Path(f"{basename}.{output_format.lower()}")
+    return Path(f"{basename}{OUTPUT_EXTENSIONS[output_format.lower()]}")
+
+
+def derive_followup_output_path(publication_output_path) -> Path:
+    publication_output_path = Path(publication_output_path)
+    return publication_output_path.with_name(
+        f"{publication_output_path.stem}_followup"
+        f"{publication_output_path.suffix}"
+    )
 
 
 def export_results(df, output_format, output_path):
@@ -533,7 +622,7 @@ def normalize_api_result(result):
 def _prepare_for_excel(df):
     from modules.utils import Excel
 
-    return df.apply(lambda column: column.map(Excel.coerce_for_excel))
+    return Excel.prepare_dataframe(df)
 
 
 if __name__ == "__main__":

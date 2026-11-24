@@ -239,9 +239,73 @@ class List:
                  .sort_values(by="count", ascending=False)
 
 class Excel:
+    MAX_CELL_UTF16_UNITS = 32767
+
     @staticmethod
     def coerce_for_excel(value):
         if isinstance(value, (dict, list)):
             return str(value)
         return value
+
+    @staticmethod
+    def split_for_excel(value):
+        value = Excel.coerce_for_excel(value)
+        if not isinstance(value, str):
+            return [value]
+        if len(value) <= Excel.MAX_CELL_UTF16_UNITS // 2:
+            return [value]
+        if Excel._utf16_length(value) <= Excel.MAX_CELL_UTF16_UNITS:
+            return [value]
+
+        parts = []
+        units = 0
+        characters = []
+        for character in value:
+            character_units = 2 if ord(character) > 0xFFFF else 1
+            if units + character_units > Excel.MAX_CELL_UTF16_UNITS:
+                parts.append("".join(characters))
+                characters = []
+                units = 0
+            characters.append(character)
+            units += character_units
+        parts.append("".join(characters))
+        return parts
+
+    @staticmethod
+    def prepare_dataframe(df):
+        prepared_columns = {}
+        occupied_names = set(df.columns)
+
+        for column_name in df.columns:
+            split_values = [Excel.split_for_excel(value) for value in df[column_name]]
+            part_count = max((len(parts) for parts in split_values), default=1)
+            prepared_columns[column_name] = [parts[0] for parts in split_values]
+
+            for part_index in range(1, part_count):
+                part_name = Excel._part_column_name(
+                    column_name,
+                    part_index + 1,
+                    occupied_names,
+                )
+                prepared_columns[part_name] = [
+                    parts[part_index] if len(parts) > part_index else None
+                    for parts in split_values
+                ]
+
+        return pd.DataFrame(prepared_columns, index=df.index)
+
+    @staticmethod
+    def _part_column_name(column_name, part_number, occupied_names):
+        base_name = f"{column_name}_part_{part_number}"
+        candidate = base_name
+        suffix = 2
+        while candidate in occupied_names:
+            candidate = f"{base_name}_{suffix}"
+            suffix += 1
+        occupied_names.add(candidate)
+        return candidate
+
+    @staticmethod
+    def _utf16_length(value):
+        return len(value.encode("utf-16-le")) // 2
 

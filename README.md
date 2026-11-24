@@ -121,7 +121,8 @@ Before running spreadsheet enrichment, choose:
 - `id column`: column containing DOI values or OpenAlex work IDs.
 - `mode`: `full`, `enrich`, or `followup`.
 - `output format`: `json` or `excel`.
-- `output file`: where the enriched result should be written.
+- `output file`: where enriched publication rows should be written.
+- `follow-up output file`: where follow-up occurrence rows should be written.
 - `keys`: OpenAlex fields to add to the main publication rows.
 - `follow-up field`: nested OpenAlex list field that contains IDs needing another request.
 - `follow-up mode`: `resume_cache` or `build_cache`.
@@ -129,8 +130,8 @@ Before running spreadsheet enrichment, choose:
 
 ### Enrichment Modes
 
-`full` first enriches the input publication rows and then runs the follow-up
-workflow.
+`full` first enriches and saves the input publication rows. It then runs the
+follow-up workflow and saves those occurrence rows to a separate output file.
 
 `enrich` enriches the input publication rows directly with selected OpenAlex
 fields.
@@ -147,6 +148,11 @@ Follow-up cache modes:
 
 - `resume_cache`: reuse existing cache files and fetch only missing items.
 - `build_cache`: rebuild the follow-up cache from the full input file.
+
+Large follow-up jobs can continue across multiple runs. Cache checkpoints are
+saved after each block of 5,000 items. After an interrupted `full` run, use
+`followup` with `resume_cache` to continue only the follow-up phase. This avoids
+repeating publication enrichment and does not overwrite its output file.
 
 Direct enrichment example:
 
@@ -170,6 +176,19 @@ If no output file is provided, `enrich_works` writes:
 
 - `publication_details_enriched.json`
 - `publication_details_enriched.xlsx`
+
+In `full` mode, the configured output is the publication file and the follow-up
+result adds `_followup` before the extension. For example:
+
+- `publication_details_enriched.xlsx`
+- `publication_details_enriched_followup.xlsx`
+
+Use `--followup-output` when you want another follow-up filename.
+
+Excel limits each cell to 32,767 UTF-16 units. When a nested OpenAlex value is
+too long for one cell, the exporter preserves all content by adding adjacent
+columns such as `authorships_part_2`, `authorships_part_3`, and so on. Join the
+parts from left to right to reconstruct the original value.
 
 ## Input File For Enrichment
 
